@@ -112,22 +112,22 @@ struct Event {
 }
 
 #[derive(Debug, Serialize)]
-pub struct AccountData {
+struct AccountData {
     events: Vec<Event>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct InvitedRoom {
+struct InvitedRoom {
     invite_state: InviteState,
 }
 
 #[derive(Debug, Serialize)]
-pub struct InviteState {
+struct InviteState {
     events: Vec<StrippedState>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct StrippedState {
+struct StrippedState {
     content: JsonValue,
     state_key: String,
     #[serde(rename = "type")]
@@ -136,14 +136,14 @@ pub struct StrippedState {
 }
 
 #[derive(Debug, Serialize)]
-pub struct LeftRoom {
+struct LeftRoom {
     state: State,
     timeline: Timeline,
     account_data: AccountData,
 }
 
 #[derive(Debug, Serialize)]
-pub struct Presence {
+struct Presence {
     events: Vec<Event>,
 }
 
