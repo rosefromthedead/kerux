@@ -12,6 +12,7 @@ use crate::ServerState;
 
 mod auth;
 mod error;
+mod room;
 mod sync;
 mod user;
 
@@ -46,6 +47,9 @@ pub fn client_app(state: Arc<ServerState>) -> tide::App<Arc<ServerState>> {
     r0.at("/profile/:user_id/displayname")
         .get(user::get_display_name)
         .put(user::set_display_name);
+
+    r0.at("/createRoom")
+        .post(room::create_room);
     app
 }
 
