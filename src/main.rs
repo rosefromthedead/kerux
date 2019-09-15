@@ -11,6 +11,7 @@ use std::{
 
 mod client;
 mod db_pool;
+mod events;
 
 use db_pool::DbPool;
 
