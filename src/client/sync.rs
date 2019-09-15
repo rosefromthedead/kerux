@@ -111,6 +111,42 @@ struct Event {
     ty: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AccountData {
+    events: Vec<Event>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InvitedRoom {
+    invite_state: InviteState,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InviteState {
+    events: Vec<StrippedState>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StrippedState {
+    content: JsonValue,
+    state_key: String,
+    #[serde(rename = "type")]
+    ty: String,
+    sender: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeftRoom {
+    state: State,
+    timeline: Timeline,
+    account_data: AccountData,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Presence {
+    events: Vec<Event>,
+}
+
 pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let mut db_client = cx.state().db_pool.get_client().await?;
     let access_token = get_access_token(&cx)?;
@@ -149,16 +185,5 @@ pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
         events_list.push(event);
     }
 
-    Ok(response::json(json!({
-        "next_batch": next_batch,
-        "rooms": {
-            "join": joined_rooms,
-            "invite": invited_rooms,
-            "leave": left_rooms,
-        },
-        "presence": {
-            "events": [],
-        },
-        "account_data": account_data
-    })))
+    Ok(response::json(json!({})))
 }
