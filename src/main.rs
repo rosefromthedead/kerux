@@ -10,10 +10,9 @@ use std::{
 };
 
 mod client;
-mod db_pool;
 mod events;
-
-use db_pool::DbPool;
+mod log;
+mod storage;
 
 #[derive(Deserialize)]
 pub struct Config {
@@ -22,7 +21,7 @@ pub struct Config {
 
 pub struct ServerState {
     pub config: Config,
-    pub db_pool: DbPool,
+    pub db_pool: storage::postgres::DbPool,
 }
 
 impl Debug for ServerState {
@@ -43,7 +42,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     tracing_log::LogTracer::init()?;
 
     let config = toml::from_slice(&tokio::fs::read("./config.toml").compat().await?)?;
-    let db_pool = DbPool::new(String::from("host=/run/postgresql/ user=postgres dbname=matrix"), 64);
+    let db_pool = storage::postgres::DbPool::new(String::from("host=/run/postgresql/ user=postgres dbname=matrix"), 64);
     let server_state = Arc::new(ServerState { config, db_pool });
 
     let client_app = client::client_app(server_state);

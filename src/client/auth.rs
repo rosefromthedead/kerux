@@ -32,15 +32,6 @@ pub fn get_access_token(cx: &Context<Arc<ServerState>>) -> Result<Uuid, Error> {
     }
 }
 
-pub async fn try_auth(db_client: &mut crate::db_pool::ClientGuard, token: Uuid) -> Result<i64, Error> {
-    let query = db_client.prepare("SELECT id FROM access_tokens WHERE token = $1;").compat().await?;
-    let mut rows = db_client.query(&query, &[&token]).compat();
-    let row = rows.next().await.unwrap()?;
-    let id = row.try_get("id")?;
-    Ok(id)
-}
-
-#[tracing::instrument]
 pub async fn get_supported_login_types(_cx: Context<Arc<ServerState>>) -> ClientResult {
     //TODO: allow config
     Ok(response::json(json!({
@@ -52,7 +43,6 @@ pub async fn get_supported_login_types(_cx: Context<Arc<ServerState>>) -> Client
     })))
 }
 
-#[tracing::instrument]
 pub async fn login(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     #[derive(Debug, Deserialize)]
     #[serde(tag = "type")]
@@ -91,22 +81,13 @@ pub async fn login(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     };
     let password = request.password.ok_or(Error::Unimplemented)?;
     
-    let mut db_client = cx.state().db_pool.get_client().await?;
-
-    let get_user = db_client.prepare("SELECT * FROM users WHERE name=$1;").compat().await?;
-    let mut rows = db_client.query(&get_user, &[&username]).compat(); 
-    let user = rows.next().await.ok_or(Error::Forbidden)??;
-
-    match argon2::verify_encoded(user.try_get("password_hash")?, password.as_bytes()) {
-        Ok(true) => {},
-        Ok(false) | Err(_) => return Err(Error::Forbidden),
+    let mut db = cx.state().db_pool.get_client().await?;
+    if !db.verify_password(&username, &password).await? {
+        return Err(Error::Forbidden);
     }
 
-    let access_token = uuid::Uuid::new_v4();
     let device_id = request.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
-    let id: i64 = user.try_get("id")?;
-    let insert_token = db_client.prepare("INSERT INTO access_tokens(token, user_id, device_id) VALUES ($1, $2, $3);").compat().await?;
-    db_client.execute(&insert_token, &[&access_token, &id, &device_id]).compat().await?;
+    let access_token = db.create_access_token(&username, &device_id).await?;
 
     let user_id = format!("@{}:{}", username, cx.state().config.domain);
     let access_token = format!("{}", access_token.to_hyphenated());
@@ -120,26 +101,18 @@ pub async fn login(mut cx: Context<Arc<ServerState>>) -> ClientResult {
 
 pub async fn logout(cx: Context<Arc<ServerState>>) -> ClientResult {
     let token = get_access_token(&cx)?;
-    let mut db_client = cx.state().db_pool.get_client().await?;
-    let stmt = db_client.prepare("DELETE FROM access_tokens WHERE token = $1;").compat().await?;
-    db_client.execute(&stmt, &[&token]).compat().await?;
+    let mut db = cx.state().db_pool.get_client().await?;
+    db.delete_access_token(token).await?;
     Ok(response::json(json!({})))
 }
 
 pub async fn logout_all(cx: Context<Arc<ServerState>>) -> ClientResult {
     let token = get_access_token(&cx)?;
-    let mut db_client = cx.state().db_pool.get_client().await?;
-    let stmt = db_client.prepare(
-        "WITH id AS (
-            SELECT user_id FROM access_tokens WHERE token = $1
-        )
-        DELETE FROM access_tokens WHERE user_id IN id;").compat().await?;
-    db_client.execute(&stmt, &[&token]).compat().await?;
-    
+    let mut db = cx.state().db_pool.get_client().await?;
+    db.delete_all_access_tokens(token).await?;    
     Ok(response::json(json!({})))
 }
 
-#[tracing::instrument]
 pub async fn register(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     #[derive(Debug, Deserialize)]
     struct RegisterRequest {
@@ -164,21 +137,16 @@ pub async fn register(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let salt: [u8; 16] = rand::random();
     let password_hash = argon2::hash_encoded(request.password.as_bytes(), &salt, &Default::default())?;
 
-    let mut db_client = cx.state().db_pool.get_client().await?;
-    let stmt = db_client.prepare("INSERT INTO users(name, password_hash) VALUES ($1, $2); SELECT currval('users_id_seq');").compat().await?;
-    let mut rows = db_client.query(&stmt, &[&request.username, &password_hash]).compat();
-    let row = rows.next().await.expect("no users_id_seq value in table users")?;
-    let id: i64 = row.get("currval");
+    let mut db = cx.state().db_pool.get_client().await?;
+    db.create_user(&request.username, Some(&password_hash)).await?;
     if request.inhibit_login {
         return Ok(response::json(json!({
             "user_id": request.username
         })));
     }
     
-    let access_token = uuid::Uuid::new_v4();
     let device_id = request.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
-    let insert_token = db_client.prepare("INSERT INTO access_tokens(token, user_id, device_id) VALUES ($1, $2, $3);").compat().await?;
-    db_client.execute(&insert_token, &[&access_token, &id, &device_id]).compat().await?;
+    let access_token = db.create_access_token(&request.username, &device_id).await?;
 
     let user_id = format!("@{}:{}", request.username, cx.state().config.domain);
     let access_token = format!("{}", access_token.to_hyphenated());
