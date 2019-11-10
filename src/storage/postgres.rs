@@ -1,13 +1,16 @@
 use crossbeam::queue::ArrayQueue;
 use futures::{
     compat::{Future01CompatExt, Stream01CompatExt},
-    stream::StreamExt,
+    stream::{StreamExt, TryStreamExt},
 };
 use pg::{Client, Error as DbError, NoTls};
 use serde_json::{Value as JsonValue, to_value as to_json_value};
 use std::sync::Arc;
 
-use crate::client::error::Error;
+use crate::{
+    client::error::Error,
+    events::{room::Membership, RoomEventV4},
+};
 
 pub struct DbPool {
     db_address: String,
@@ -73,6 +76,7 @@ impl Drop for ClientGuard {
     }
 }
 
+// Eventually this will become a trait to allow more storage backends
 impl ClientGuard {
     pub async fn create_user(&mut self, user_id: &str, password_hash: Option<&str>) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
@@ -191,12 +195,72 @@ impl ClientGuard {
         Ok(())
     }
 
-    pub async fn add_user_to_room(&mut self, user_id: &str, room_id: &str) -> Result<(), DbError> {
+    pub async fn get_memberships_by_user(&mut self, user_id: &str)
+            -> Result<Vec<(String, Membership)>, DbError> {
         let db = self.inner.as_mut().unwrap();
-        let stmt = db.prepare("
-            INSERT INTO users_in_rooms(user_id, room_id) VALUES ($1, $2);
+        let query = db.prepare("
+            SELECT room_id, membership FROM room_memberships WHERE user_id = $1;
         ").compat().await?;
-        db.execute(&stmt, &[&user_id, &room_id]).compat().await?;
+        db.query(&query, &[&user_id]).compat()
+            .map(|row| {
+                let membership = match row?.get("membership") {
+                   "ban" => Membership::Ban,
+                   "invite" => Membership::Invite,
+                   "join" => Membership::Join,
+                   "knock" => Membership::Knock,
+                   "leave" => Membership::Leave,
+                };
+                Ok((row?.get("room_id"), membership))
+            })
+            .try_collect::<Vec<(_, _)>>().await
+    }
+
+    pub async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT membership, COUNT(membership) FROM room_memberships
+                WHERE room_id = $1
+                GROUP BY membership;
+        ").compat().await?;
+        let rows = db.query(&query, &[&room_id]).compat();
+        let mut joined_member_count = 0;
+        let mut invited_member_count = 0;
+        while let Some(row) = rows.next().await {
+            let count = row?.get("count");
+            match row?.get("membership") {
+                "join" => joined_member_count = count,
+                "invite" => invited_member_count = count,
+                _ => {},
+            }
+        }
+        Ok((joined_member_count, invited_member_count))
+    }
+}
+
+impl ClientGuard {
+    async fn handle_event(&mut self, event: &RoomEventV4) -> Result<(), DbError> {
+        let db = self.inner.as_mut().unwrap();
+        match &*event.ty {
+            "m.room.member" => {
+                let membership = event.content.get("membership").unwrap();
+                if membership != "leave" {
+                    let stmt = db.prepare("
+                        INSERT INTO room_memberships(user_id, room_id, membership, event_id)
+                            VALUES ($1, $2, $3, $4)
+                            ON CONFLICT DO UPDATE SET membership = $3, event_id = $4;
+                    ").compat().await?;
+                    db.execute(&stmt,
+                        &[&event.state_key, &event.room_id, &membership, &event.hashes.sha256]
+                    ).compat().await?;
+                } else {
+                    let stmt = db.prepare("
+                        DELETE FROM room_memberships WHERE user_id = $1 AND room_id = $2;
+                    ").compat().await?;
+                    db.execute(&stmt, &[&event.state_key, &event.room_id]).compat().await?;
+                }
+            },
+            _ => {},
+        }
         Ok(())
     }
 }
