@@ -7,25 +7,44 @@ use tide::{
 use std::{
     io::Error as IoError,
     str::Utf8Error,
+    string::FromUtf8Error,
 };
 
 #[derive(Debug)]
 pub enum Error {
+    /// Forbidden access, e.g. joining a room without permission, failed login.
     Forbidden,
+    /// The access token specified was not recognised.
     UnknownToken,
+    /// No access token was specified for the request.
     MissingToken,
+    /// Request contained valid JSON, but it was malformed in some way, e.g. missing required keys,
+    /// invalid values for keys.
     BadJson(String),
+    /// Request did not contain valid JSON.
     NotJson(String),
+    /// No resource was found for this request.
     NotFound,
+    /// Too many requests have been sent in a short period of time.
     LimitExceeded,
+    /// A required URL parameter was missing from the request.
     MissingParam(String),
+    /// A specified URL parameter has an invalid value.
     InvalidParam(String),
+    /// The specified room version is not supported.
+    UnsupportedRoomVersion,
 
+    /// An encoded string in the URL was not valid UTF-8.
     UrlNotUtf8(Utf8Error),
+    /// A database error occurred.
     DbError(pg::Error),
+    /// An I/O error occurred.
     IoError(IoError),
+    /// A password error occurred.
     PasswordError(argon2::Error),
+    /// The requested feature is unimplemented.
     Unimplemented,
+    /// An unknown error occurred.
     Unknown(String),
 }
 
@@ -79,6 +98,11 @@ impl IntoResponse for Error {
                 format!("Invalid URL parameter: {}", error),
                 StatusCode::BAD_REQUEST)
             },
+            UnsupportedRoomVersion => {
+                ("M_UNSUPPORTED_ROOM_VERSION",
+                "The specified room version is not supported.".to_string(),
+                StatusCode::BAD_REQUEST)
+            },
             UrlNotUtf8(error) => {
                 ("M_UNKNOWN",
                 format!("Malformed UTF-8 in URL: {}", error),
@@ -119,6 +143,12 @@ impl IntoResponse for Error {
 
 impl From<Utf8Error> for Error {
     fn from(e: Utf8Error) -> Self {
+        Error::NotJson(format!("{}", e))
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(e: FromUtf8Error) -> Self {
         Error::NotJson(format!("{}", e))
     }
 }
