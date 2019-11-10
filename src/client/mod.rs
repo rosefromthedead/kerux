@@ -1,9 +1,8 @@
+use futures::FutureExt;
 use serde_json::json;
 use std::sync::Arc;
 use tide::{
-    cors::CorsMiddleware,
     http::header::HeaderValue,
-    middleware::RequestLogger,
     response::{self, Response},
     Context,
 };
@@ -11,7 +10,7 @@ use tide::{
 use crate::ServerState;
 
 mod auth;
-mod error;
+pub mod error;
 mod room;
 mod sync;
 mod user;
@@ -28,7 +27,7 @@ pub fn client_app(state: Arc<ServerState>) -> tide::App<Arc<ServerState>> {
                 "Origin, X-Requested-With, Content-Type, Accept, Authorization",
             )),
         );*/
-    app.middleware(RequestLogger::new());
+    app.middleware(crate::log::handle);
     let mut client_api = app.at("/_matrix/client");
     client_api.at("/versions").get(versions);
     let mut r0 = client_api.at("r0");
