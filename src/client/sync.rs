@@ -12,10 +12,11 @@ use tide::{response, querystring::ContextExt, Context};
 
 use crate::{
     client::{
-        auth::{get_access_token, try_auth},
+        auth::get_access_token,
         error::Error,
         ClientResult,
     },
+    events::room::Membership,
     ServerState,
 };
 
@@ -32,9 +33,9 @@ struct SyncRequest {
 #[derive(Debug, Serialize)]
 struct SyncResponse {
     next_batch: String,
-    rooms: Rooms,
-    presence: Presence,
-    account_data: AccountData,
+    rooms: Option<Rooms>,
+    presence: Option<Presence>,
+    account_data: Option<AccountData>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,42 +149,43 @@ struct Presence {
 }
 
 pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
-    let mut db_client = cx.state().db_pool.get_client().await?;
+    let mut db = cx.state().db_pool.get_client().await?;
     let access_token = get_access_token(&cx)?;
-    let id = try_auth(&mut db_client, access_token).await?;
+    let username = db.try_auth(access_token).await?;
+    let user_id = format!("@{}:{}", username, cx.state().config.domain);
 
     let request = cx.url_query().map_err(|_| Error::InvalidParam(String::new()))?;
     tracing::debug!(req = tracing::field::debug(&request));
 
-    let query = db_client.prepare("SELECT room_id FROM users_in_rooms WHERE user_id = $1;").compat().await?;
-    let rows = db_client.query(&query, &[&id]).compat().map_ok(|row| -> i64 { row.get("room_id") });
-    let rooms = rows.try_collect::<Vec<i64>>().await?;
-
-    let query = db_client.prepare(
-        "SELECT
-            rooms.name AS room_name, content, type, event_id, sender, origin_server_ts, unsigned
-            FROM room_events, rooms
-            WHERE room_id IN $1;").compat().await?;
-    let rows = db_client.query(&query, &[&rooms]).compat();
-    let mut events_iter = rows
-        .map(|row| -> Result<(String, RoomEvent), pg::Error> {
-            let row = row?;
-            Ok((row.get("room_name"), RoomEvent {
-                content: row.get("content"),
-                ty: row.get("type"),
-                event_id: row.get("event_id"),
-                sender: row.get("sender"),
-                origin_server_ts: row.get("origin_server_ts"),
-                unsigned: row.get("unsigned"),
-            }))
-        });
-    
-    let mut events = HashMap::<String, Vec<RoomEvent>>::new();
-    while let Some(tuple) = events_iter.next().await {
-        let (room_name, event) = tuple?;
-        let events_list = events.entry(room_name).or_default();
-        events_list.push(event);
+    let memberships = db.get_memberships_by_user(&user_id).await?;
+    let mut join = HashMap::new();
+    let mut invite = HashMap::new();
+    let mut leave = HashMap::new();
+    for (room_id, membership) in memberships {
+        match membership {
+            Membership::Join => {
+                let (joined_member_count, invited_member_count)
+                    = db.get_room_member_counts(&room_id).await?;
+                let summary = RoomSummary {
+                    heroes: None,   // TODO
+                    joined_member_count,
+                    invited_member_count,
+                };
+                join.insert(room_id, JoinedRoom {
+                    summary,
+                    state,
+                });
+            },
+            Membership::Invite => {},
+            Membership::Leave => {}
+        }
     }
+    let rooms = Rooms { join, invite, leave };
 
-    Ok(response::json(json!({})))
+    Ok(response::json(SyncResponse {
+        next_batch: String::new(),
+        rooms: Some(rooms),
+        presence: None,
+        account_data: None,
+    }))
 }
