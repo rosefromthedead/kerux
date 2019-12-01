@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::{
     client::error::Error,
-    events::{room::Membership, RoomEventV4},
+    events::{room::Membership, PduV4, Event},
 };
 
 pub struct DbPool {
@@ -165,7 +165,7 @@ impl ClientGuard {
     }
 
     pub async fn add_events(&mut self,
-        events: impl IntoIterator<Item = crate::events::RoomEventV4>
+        events: impl IntoIterator<Item = PduV4>
     ) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
@@ -235,10 +235,64 @@ impl ClientGuard {
         }
         Ok((joined_member_count, invited_member_count))
     }
+
+    pub async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT DISTINCT ON (state_key)
+                content, type, event_id, sender, origin_server_ts, unsigned, state_key
+                FROM room_events
+                WHERE room_id = $1 AND state_key != NULL
+                ORDER BY state_key, depth DESC;
+        ").compat().await?;
+        let rows = db.query(&query, &[&room_id]).compat();
+        let mut ret = Vec::new();
+        while let Some(row) = rows.next().await {
+            let row = row?;
+            ret.push(Event {
+                content: row.try_get("content")?,
+                ty: row.try_get("type")?,
+                event_id: row.try_get("event_id")?,
+                sender: row.try_get("sender")?,
+                origin_server_ts: row.try_get("origin_server_ts")?,
+                unsigned: row.try_get("unsigned")?,
+                state_key: row.try_get("state_key")?,
+            });
+        }
+        Ok(ret)
+}
+
+    pub async fn get_events_since(&mut self, room_id: &str, since: &str)
+            -> Result<Vec<Event>, Error> {
+        let db = self.inner.unwrap();
+        let since: i64 = since.parse()
+            .map_err(|_| Error::InvalidParam(String::from("invalid since param")))?;
+        let query = db.prepare("
+            SELECT
+            content, type, event_id, sender, origin_server_ts, unsigned, state_key
+            FROM room_events
+            WHERE room_id = $1 AND ordering > $2;
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&room_id, &since]).compat();
+        let mut ret = Vec::new();
+        while let Some(row) = rows.next().await {
+            let row = row?;
+            ret.push(Event {
+                content: row.try_get("content")?,
+                ty: row.try_get("type")?,
+                event_id: row.try_get("event_id")?,
+                sender: row.try_get("sender")?,
+                origin_server_ts: row.try_get("origin_server_ts")?,
+                unsigned: row.try_get("unsigned")?,
+                state_key: row.try_get("state_key")?,
+            });
+        }
+        Ok(ret)
+}
 }
 
 impl ClientGuard {
-    async fn handle_event(&mut self, event: &RoomEventV4) -> Result<(), DbError> {
+    async fn handle_event(&mut self, event: &PduV4) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         match &*event.ty {
             "m.room.member" => {

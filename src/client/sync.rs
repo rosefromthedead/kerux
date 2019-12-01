@@ -1,9 +1,5 @@
-use futures::{
-    compat::{Future01CompatExt, Stream01CompatExt},
-    stream::{StreamExt, TryStreamExt},
-};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
     sync::Arc
@@ -16,7 +12,10 @@ use crate::{
         error::Error,
         ClientResult,
     },
-    events::room::Membership,
+    events::{
+        Event,
+        room::Membership,
+    },
     ServerState,
 };
 
@@ -66,47 +65,25 @@ struct RoomSummary {
 
 #[derive(Debug, Serialize)]
 struct State {
-    events: Vec<StateEvent>,
-}
-
-#[derive(Debug, Serialize)]
-struct StateEvent {
-    content: JsonValue,
-    #[serde(rename = "type")]
-    ty: String,
-    event_id: String,
-    sender: String,
-    origin_server_ts: i64,
-    unsigned: Option<JsonValue>,
-    prev_content: Option<JsonValue>,
-    state_key: String,
+    events: Vec<Event>,
 }
 
 #[derive(Debug, Serialize)]
 struct Timeline {
-    events: Vec<RoomEvent>,
+    events: Vec<Event>,
     limited: bool,
     prev_batch: String,
 }
 
 #[derive(Debug, Serialize)]
-struct RoomEvent {
-    content: JsonValue,
-    #[serde(rename = "type")]
-    ty: String,
-    event_id: String,
-    sender: String,
-    origin_server_ts: i64,
-    unsigned: Option<JsonValue>,
-}
-
-#[derive(Debug, Serialize)]
 struct Ephemeral {
-    events: Vec<Event>,
+    events: Vec<KvPair>,
 }
 
+/// This is referred to as `Event` in the Matrix spec, but we already have a thing called event
+/// and it doesn't really make sense to call it that.
 #[derive(Debug, Serialize)]
-struct Event {
+struct KvPair {
     content: JsonValue,
     #[serde(rename = "type")]
     ty: String,
@@ -114,7 +91,7 @@ struct Event {
 
 #[derive(Debug, Serialize)]
 struct AccountData {
-    events: Vec<Event>,
+    events: Vec<KvPair>,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,7 +122,7 @@ struct LeftRoom {
 
 #[derive(Debug, Serialize)]
 struct Presence {
-    events: Vec<Event>,
+    events: Vec<KvPair>,
 }
 
 pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
@@ -154,8 +131,8 @@ pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let username = db.try_auth(access_token).await?;
     let user_id = format!("@{}:{}", username, cx.state().config.domain);
 
-    let request = cx.url_query().map_err(|_| Error::InvalidParam(String::new()))?;
-    tracing::debug!(req = tracing::field::debug(&request));
+    let req: SyncRequest = cx.url_query().map_err(|_| Error::InvalidParam(String::new()))?;
+    tracing::debug!(req = tracing::field::debug(&req));
 
     let memberships = db.get_memberships_by_user(&user_id).await?;
     let mut join = HashMap::new();
@@ -171,9 +148,29 @@ pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
                     joined_member_count,
                     invited_member_count,
                 };
+                let state = if req.full_state {
+                    State { events: db.get_full_state(&room_id).await? }
+                } else {
+                    State { events: Vec::new() }
+                };
+                let timeline = Timeline {
+                    events: db.get_events_since(&room_id, &req.since).await?,
+                    limited: false,
+                    prev_batch: String::from("placeholder_prev_batch"),
+                };
+                //TODO: implement ephemeral events and per-room account data
+                let ephemeral = Ephemeral {
+                    events: Vec::new(),
+                };
+                let account_data = AccountData {
+                    events: Vec::new(),
+                };
                 join.insert(room_id, JoinedRoom {
                     summary,
                     state,
+                    timeline,
+                    ephemeral,
+                    account_data,
                 });
             },
             Membership::Invite => {},
