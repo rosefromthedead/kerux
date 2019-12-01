@@ -15,10 +15,22 @@ pub fn into_json_map(value: impl Serialize) -> Map<String, JsonValue> {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct Event {
+    content: JsonValue,
+    #[serde(rename = "type")]
+    ty: String,
+    event_id: String,
+    sender: String,
+    origin_server_ts: i64,
+    unsigned: Option<JsonValue>,
+    state_key: Option<String>,
+}
+
 /// An unhashed (incomplete) Persistent Data Unit for room version 4.
 /// This can only be used to construct a complete, hashed PDU.
 #[derive(Serialize)]
-pub struct UnhashedEvent {
+pub struct UnhashedPdu {
     pub room_id: String,
     pub sender: String,
     pub origin: String,
@@ -36,7 +48,7 @@ pub struct UnhashedEvent {
 }
 
 /// A Persistent Data Unit (room event) for room version 4.
-pub struct RoomEventV4 {
+pub struct PduV4 {
     pub room_id: String,
     pub sender: String,
     pub origin: String,
@@ -58,14 +70,14 @@ pub struct EventHash {
     pub sha256: String,
 }
 
-impl UnhashedEvent {
+impl UnhashedPdu {
     /// Turns self into a hashed RoomEventV4 by hashing its contents.
     ///
     /// Does not add any signatures.
-    pub fn finalize(self) -> RoomEventV4 {
+    pub fn finalize(self) -> PduV4 {
         let json = to_canonical_json(&self).unwrap();
         let sha256 = base64::encode_config(digest(&SHA256, json.as_bytes()).as_ref(), base64::URL_SAFE_NO_PAD);
-        RoomEventV4 {
+        PduV4 {
            room_id: self.room_id,
            sender: self.sender,
            origin: self.origin,

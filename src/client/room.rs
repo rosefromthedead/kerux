@@ -1,6 +1,3 @@
-use futures::{
-    FutureExt, TryFutureExt,
-};
 use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
 use std::{
@@ -16,7 +13,7 @@ use crate::{
         ClientResult,
     },
     events::{
-        self, room, RoomEventV4, UnhashedEvent, into_json_map
+        self, room, PduV4, UnhashedPdu, into_json_map
     },
     ServerState,
 };
@@ -98,7 +95,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             extra,
         })
     };
-    let room_create_event = UnhashedEvent {
+    let room_create_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -122,7 +119,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             is_direct,
         })
     };
-    let creator_join_event = UnhashedEvent {
+    let creator_join_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -137,7 +134,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
         unsigned: None,
     }.finalize();
 
-    let power_levels_event = UnhashedEvent {
+    let power_levels_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -164,7 +161,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             Preset::PublicChat => (Public, Shared, Forbidden),
         }
     };
-    let join_rules_event = UnhashedEvent {
+    let join_rules_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -178,7 +175,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
         redacts: None,
         unsigned: None,
     }.finalize();
-    let history_visibility_event = UnhashedEvent {
+    let history_visibility_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -192,7 +189,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
         redacts: None,
         unsigned: None,
     }.finalize();
-    let guest_access_event = UnhashedEvent {
+    let guest_access_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: cx.state().config.domain.clone(),
@@ -216,7 +213,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     for event in req.initial_state.into_iter().flatten() {
         let depth = events.len();
         events.push(
-            UnhashedEvent {
+            UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: cx.state().config.domain.clone(),
@@ -236,7 +233,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     if let Some(name) = req.name {
         let depth = events.len();
         events.push(
-            UnhashedEvent {
+            UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: cx.state().config.domain.clone(),
@@ -256,7 +253,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     if let Some(topic) = req.topic {
         let depth = events.len();
         events.push(
-            UnhashedEvent {
+            UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: cx.state().config.domain.clone(),
@@ -276,7 +273,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     for invitee in req.invite.into_iter().flatten() {
         let depth = events.len();
         events.push(
-            UnhashedEvent {
+            UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: cx.state().config.domain.clone(),

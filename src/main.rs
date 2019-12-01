@@ -2,7 +2,6 @@
 
 extern crate tokio_postgres as pg;
 
-use futures::compat::Future01CompatExt;
 use serde::Deserialize;
 use std::{
     fmt::{Debug, Result as FmtResult, Formatter},
@@ -38,7 +37,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    tracing::subscriber::set_global_default(tracing_fmt::FmtSubscriber::builder().finish()).unwrap();
+    tracing::subscriber::set_global_default(tracing_fmt::FmtSubscriber::builder().finish())?;
     tracing_log::LogTracer::init()?;
 
     let config = toml::from_slice(&tokio::fs::read("./config.toml").compat().await?)?;
