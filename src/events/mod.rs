@@ -8,7 +8,7 @@ pub mod room;
 /// Turns a serializable value into a `serde_json::Map<String, Value>`.
 ///
 /// Panics if the given value cannot be serialized into JSON or if it is not an object.
-pub fn into_json_map(value: impl Serialize) -> Map<String, JsonValue> {
+pub fn into_json_map(value: &impl Serialize) -> Map<String, JsonValue> {
     match serde_json::to_value(value).expect("given value cannot be serialized into json") {
         JsonValue::Object(map) => map,
         _ => panic!("cannot turn non-object value into json object"),
@@ -17,14 +17,14 @@ pub fn into_json_map(value: impl Serialize) -> Map<String, JsonValue> {
 
 #[derive(Debug, Serialize)]
 pub struct Event {
-    content: JsonValue,
+    pub content: JsonValue,
     #[serde(rename = "type")]
-    ty: String,
-    event_id: String,
-    sender: String,
-    origin_server_ts: i64,
-    unsigned: Option<JsonValue>,
-    state_key: Option<String>,
+    pub ty: String,
+    pub event_id: String,
+    pub sender: String,
+    pub origin_server_ts: i64,
+    pub unsigned: Option<JsonValue>,
+    pub state_key: Option<String>,
 }
 
 /// An unhashed (incomplete) Persistent Data Unit for room version 4.

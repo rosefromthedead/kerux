@@ -1,8 +1,11 @@
-use serde_json::{Error as JsonError, json};
-use tide::{
-    http::status::StatusCode,
-    response::{self, IntoResponse, Response},
+use actix_web::{
+    error::JsonPayloadError,
+    http::StatusCode,
+    web::HttpResponse,
+    ResponseError,
 };
+use displaydoc::Display;
+use serde_json::{Error as JsonError, json};
 
 use std::{
     io::Error as IoError,
@@ -10,7 +13,8 @@ use std::{
     string::FromUtf8Error,
 };
 
-#[derive(Debug)]
+//TODO: should we expose any variant fields in display impl?
+#[derive(Debug, Display)]
 pub enum Error {
     /// Forbidden access, e.g. joining a room without permission, failed login.
     Forbidden,
@@ -48,96 +52,92 @@ pub enum Error {
     Unknown(String),
 }
 
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
+impl ResponseError for Error {
+    fn status_code(&self) -> StatusCode {
+        use Error::*;
+        match self {
+            Forbidden | UnknownToken | MissingToken => StatusCode::FORBIDDEN,
+            NotFound => StatusCode::NOT_FOUND,
+            BadJson(_) | NotJson(_) | MissingParam(_) | InvalidParam(_) | UnsupportedRoomVersion
+                | UrlNotUtf8(_) | PasswordError(_) | Unknown(_) => StatusCode::BAD_REQUEST,
+            LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
+            DbError(_) | IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Unimplemented => StatusCode::NOT_IMPLEMENTED,
+        }
+    }
+    fn error_response(&self) -> HttpResponse {
         tracing::debug!("{:?}", &self);
         use Error::*;
-        let (errcode, error, http_code) = match self {
+        let (errcode, error) = match self {
             Forbidden => {
                 ("M_FORBIDDEN",
-                "Forbidden access, e.g. joining a room without permission, failed login.".to_string(),
-                StatusCode::FORBIDDEN)
+                "Forbidden access, e.g. joining a room without permission, failed login.".to_string())
             },
             UnknownToken => {
                 ("M_UNKNOWN_TOKEN",
-                "The access token specified was not recognised.".to_string(),
-                StatusCode::FORBIDDEN)
+                "The access token specified was not recognised.".to_string())
             },
             MissingToken => {
                 ("M_MISSING_TOKEN",
-                "No access token was specified for the request.".to_string(),
-                StatusCode::FORBIDDEN)
+                "No access token was specified for the request.".to_string())
             },
             BadJson(error) => {
                 ("M_BAD_JSON",
-                format!("{}", error),
-                StatusCode::BAD_REQUEST)
+                error.clone())
             },
             NotJson(error) => {
                 ("M_NOT_JSON",
-                format!("{}", error),
-                StatusCode::BAD_REQUEST)
+                error.clone())
             },
             NotFound => {
                 ("M_NOT_FOUND",
-                "No resource was found for this request.".to_string(),
-                StatusCode::NOT_FOUND)
+                "No resource was found for this request.".to_string())
             },
             LimitExceeded => {
                 ("M_LIMIT_EXCEEDED",
-                "Too many requests have been sent in a short period of time. Wait a while then try again.".to_string(),
-                StatusCode::TOO_MANY_REQUESTS)
+                "Too many requests have been sent in a short period of time. Wait a while then try again.".to_string())
             },
             MissingParam(error) => {
                 ("M_MISSING_PARAM",
-                format!("Missing URL parameter: {}", error),
-                StatusCode::BAD_REQUEST)
+                error.clone())
             },
             InvalidParam(error) => {
                 ("M_INVALID_PARAM",
-                format!("Invalid URL parameter: {}", error),
-                StatusCode::BAD_REQUEST)
+                error.clone())
             },
             UnsupportedRoomVersion => {
                 ("M_UNSUPPORTED_ROOM_VERSION",
-                "The specified room version is not supported.".to_string(),
-                StatusCode::BAD_REQUEST)
+                "The specified room version is not supported.".to_string())
             },
             UrlNotUtf8(error) => {
                 ("M_UNKNOWN",
-                format!("Malformed UTF-8 in URL: {}", error),
-                StatusCode::BAD_REQUEST)
+                format!("Malformed UTF-8 in URL: {}", error))
             },
             DbError(error) => {
                 ("M_UNKNOWN",
-                format!("{}", error),
-                StatusCode::INTERNAL_SERVER_ERROR)
+                format!("{}", error))
             },
             IoError(error) => {
                 ("M_UNKNOWN",
-                format!("{}", error),
-                StatusCode::INTERNAL_SERVER_ERROR)
+                format!("{}", error))
             },
             PasswordError(error) => {
                 ("M_UNKNOWN",
-                format!("{}", error),
-                StatusCode::BAD_REQUEST)
+                format!("{}", error))
             }
             Unimplemented => {
                 ("M_UNKNOWN",
-                "Feature unimplemented".into(),
-                StatusCode::NOT_IMPLEMENTED)
+                "Feature unimplemented".to_string())
             },
             Unknown(e) => {
                 ("M_UNKNOWN",
-                e,
-                StatusCode::BAD_REQUEST)
+                e.clone())
             }
         };
-        response::json(json!({
+        HttpResponse::with_body(self.status_code(), json!({
             "errcode": errcode,
             "error": error
-        })).with_status(http_code).into_response()
+        }).to_string().into())
     }
 }
 
@@ -150,6 +150,16 @@ impl From<Utf8Error> for Error {
 impl From<FromUtf8Error> for Error {
     fn from(e: FromUtf8Error) -> Self {
         Error::NotJson(format!("{}", e))
+    }
+}
+
+impl From<JsonPayloadError> for Error {
+    fn from(e: JsonPayloadError) -> Self {
+        if let JsonPayloadError::Deserialize(e) = e {
+            e.into()
+        } else {
+            Error::Unknown(format!("{}", e))
+        }
     }
 }
 
@@ -182,7 +192,7 @@ impl From<argon2::Error> for Error {
 }
 
 impl From<std::convert::Infallible> for Error {
-    fn from(e: std::convert::Infallible) -> Self {
+    fn from(_: std::convert::Infallible) -> Self {
         unreachable!()
     }
 }
