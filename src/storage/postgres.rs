@@ -2,6 +2,7 @@ use crossbeam::queue::ArrayQueue;
 use futures::{
     compat::{Future01CompatExt, Stream01CompatExt},
     stream::{StreamExt, TryStreamExt},
+    FutureExt,
 };
 use pg::{Client, Error as DbError, NoTls};
 use serde_json::{Value as JsonValue, to_value as to_json_value};
@@ -40,7 +41,7 @@ impl DbPool {
             let (client, conn) = pg::connect(&*self.db_address, NoTls).compat().await.map_err(|e| {
                 tracing::warn!("{}", e); e
             })?;
-            runtime::spawn(conn.compat());
+            tokio::spawn(conn.compat().map(|_| ()));
             return Ok(ClientGuard {
                 queue: Arc::clone(&self.queue),
                 inner: Some(client),
@@ -182,15 +183,16 @@ impl ClientGuard {
                 &event.origin_server_ts,
                 &event.ty,
                 &event.state_key,
-                &JsonValue::from(event.content),
-                &to_json_value(event.prev_events).unwrap(),
+                &JsonValue::from(event.content.clone()),
+                &to_json_value(&event.prev_events).unwrap(),
                 &event.depth,
-                &to_json_value(event.auth_events).unwrap(),
+                &to_json_value(&event.auth_events).unwrap(),
                 &event.redacts,
-                &event.unsigned.map(to_json_value).map(Result::unwrap),
+                &event.unsigned.as_ref().map(to_json_value).map(Result::unwrap),
                 &event.hashes.sha256,
-                &to_json_value(event.signatures).unwrap(),
+                &to_json_value(&event.signatures).unwrap(),
             ]).compat().await?;
+            handle_event(db, &event).await?;
         }
         Ok(())
     }
@@ -203,14 +205,16 @@ impl ClientGuard {
         ").compat().await?;
         db.query(&query, &[&user_id]).compat()
             .map(|row| {
-                let membership = match row?.get("membership") {
+                let row = row?;
+                let membership = match row.get("membership") {
                    "ban" => Membership::Ban,
                    "invite" => Membership::Invite,
                    "join" => Membership::Join,
                    "knock" => Membership::Knock,
                    "leave" => Membership::Leave,
+                   x => panic!("invalid value {} stored in membership row", x),
                 };
-                Ok((row?.get("room_id"), membership))
+                Ok((row.get("room_id"), membership))
             })
             .try_collect::<Vec<(_, _)>>().await
     }
@@ -222,12 +226,13 @@ impl ClientGuard {
                 WHERE room_id = $1
                 GROUP BY membership;
         ").compat().await?;
-        let rows = db.query(&query, &[&room_id]).compat();
+        let mut rows = db.query(&query, &[&room_id]).compat();
         let mut joined_member_count = 0;
         let mut invited_member_count = 0;
         while let Some(row) = rows.next().await {
-            let count = row?.get("count");
-            match row?.get("membership") {
+            let row = row?;
+            let count = row.get("count");
+            match row.get("membership") {
                 "join" => joined_member_count = count,
                 "invite" => invited_member_count = count,
                 _ => {},
@@ -245,7 +250,7 @@ impl ClientGuard {
                 WHERE room_id = $1 AND state_key != NULL
                 ORDER BY state_key, depth DESC;
         ").compat().await?;
-        let rows = db.query(&query, &[&room_id]).compat();
+        let mut rows = db.query(&query, &[&room_id]).compat();
         let mut ret = Vec::new();
         while let Some(row) = rows.next().await {
             let row = row?;
@@ -264,7 +269,7 @@ impl ClientGuard {
 
     pub async fn get_events_since(&mut self, room_id: &str, since: &str)
             -> Result<Vec<Event>, Error> {
-        let db = self.inner.unwrap();
+        let db = self.inner.as_mut().unwrap();
         let since: i64 = since.parse()
             .map_err(|_| Error::InvalidParam(String::from("invalid since param")))?;
         let query = db.prepare("
@@ -288,33 +293,30 @@ impl ClientGuard {
             });
         }
         Ok(ret)
-}
+    }
 }
 
-impl ClientGuard {
-    async fn handle_event(&mut self, event: &PduV4) -> Result<(), DbError> {
-        let db = self.inner.as_mut().unwrap();
-        match &*event.ty {
-            "m.room.member" => {
-                let membership = event.content.get("membership").unwrap();
-                if membership != "leave" {
-                    let stmt = db.prepare("
-                        INSERT INTO room_memberships(user_id, room_id, membership, event_id)
-                            VALUES ($1, $2, $3, $4)
-                            ON CONFLICT DO UPDATE SET membership = $3, event_id = $4;
-                    ").compat().await?;
-                    db.execute(&stmt,
-                        &[&event.state_key, &event.room_id, &membership, &event.hashes.sha256]
-                    ).compat().await?;
-                } else {
-                    let stmt = db.prepare("
-                        DELETE FROM room_memberships WHERE user_id = $1 AND room_id = $2;
-                    ").compat().await?;
-                    db.execute(&stmt, &[&event.state_key, &event.room_id]).compat().await?;
-                }
-            },
-            _ => {},
-        }
-        Ok(())
+async fn handle_event(db: &mut Client, event: &PduV4) -> Result<(), DbError> {
+    match &*event.ty {
+        "m.room.member" => {
+            let membership = event.content.get("membership").unwrap();
+            if membership != "leave" {
+                let stmt = db.prepare("
+                    INSERT INTO room_memberships(user_id, room_id, membership, event_id)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT DO UPDATE SET membership = $3, event_id = $4;
+                ").compat().await?;
+                db.execute(&stmt,
+                    &[&event.state_key, &event.room_id, &membership, &event.hashes.sha256]
+                ).compat().await?;
+            } else {
+                let stmt = db.prepare("
+                    DELETE FROM room_memberships WHERE user_id = $1 AND room_id = $2;
+                ").compat().await?;
+                db.execute(&stmt, &[&event.state_key, &event.room_id]).compat().await?;
+            }
+        },
+        _ => {},
     }
+    Ok(())
 }

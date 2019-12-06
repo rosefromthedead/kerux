@@ -1,14 +1,14 @@
-use futures::{
-    compat::{Future01CompatExt, Stream01CompatExt},
-    stream::StreamExt,
+use actix_web::{
+    dev::Payload,
+    web::{Data, Json},
+    get, post, HttpRequest, FromRequest,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use tide::{response, Context};
 use uuid::Uuid;
 
-use crate::{client::{error::Error, ClientResult}, ServerState};
+use crate::{client::error::Error, ServerState};
 
 #[derive(Debug, Deserialize)]
 enum LoginType {
@@ -16,142 +16,177 @@ enum LoginType {
     Password,
 }
 
-pub fn get_access_token(cx: &Context<Arc<ServerState>>) -> Result<Uuid, Error> {
-    if let Some(s) = cx.headers().get("Authorization") {
-        let s: &str = s.to_str().map_err(|_| Error::MissingToken)?;
-        if !s.starts_with("Bearer ") {
-            return Err(Error::MissingToken);
+pub struct AccessToken(pub Uuid);
+
+impl FromRequest for AccessToken {
+    type Error = Error;
+    type Future = futures::future::Ready<Result<Self, Self::Error>>;
+    type Config = ();
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let res = (|| {
+            if let Some(s) = req.headers().get("Authorization") {
+                let s: &str = s.to_str().map_err(|_| Error::MissingToken)?;
+                if !s.starts_with("Bearer ") {
+                    return Err(Error::MissingToken);
+                }
+                let token = s.trim_start_matches("Bearer ").parse().map_err(|_| Error::UnknownToken)?;
+                Ok(token)
+            } else if let Some(pair) = req.uri().query().ok_or(Error::MissingToken)?.split('&').find(|pair| pair.starts_with("access_token")) {
+                let token = pair.trim_start_matches("access_token=").parse().map_err(|_| Error::UnknownToken)?;
+                Ok(token)
+            } else {
+                Err(Error::MissingToken)
+            }
+        })();
+        match res {
+            Ok(token) => futures::future::ok(AccessToken(token)),
+            Err(e) => futures::future::err(e),
         }
-        let token = s.trim_start_matches("Bearer ").parse().map_err(|_| Error::UnknownToken)?;
-        Ok(token)
-    } else if let Some(pair) = cx.uri().query().ok_or(Error::MissingToken)?.split('&').find(|pair| pair.starts_with("access_token")) {
-        let token = pair.trim_start_matches("access_token=").parse().map_err(|_| Error::UnknownToken)?;
-        Ok(token)
-    } else {
-        Err(Error::MissingToken)
     }
 }
 
-pub async fn get_supported_login_types(_cx: Context<Arc<ServerState>>) -> ClientResult {
+#[get("/login")]
+pub async fn get_supported_login_types() -> Json<serde_json::Value> {
     //TODO: allow config
-    Ok(response::json(json!({
+    Json(json!({
         "flows": [
             {
                 "type": "m.login.password"
             }
         ]
-    })))
+    }))
 }
 
-pub async fn login(mut cx: Context<Arc<ServerState>>) -> ClientResult {
-    #[derive(Debug, Deserialize)]
-    #[serde(tag = "type")]
-    enum Identifier {
-        #[serde(rename = "m.id.user")]
-        Username {
-            user: String,
-        },
-        #[serde(rename = "m.id.thirdparty")]
-        ThirdParty {
-            medium: String,
-            address: String,
-        },
-        #[serde(rename = "m.id.phone")]
-        Phone {
-            country: String,
-            phone: String,
-        },
-    }
-    #[derive(Debug, Deserialize)]
-    struct LoginRequest {
-        #[serde(rename = "type")]
-        login_type: LoginType,
-        identifier: Identifier,
-        password: Option<String>,
-        token: Option<String>,
-        device_id: Option<String>,
-        initial_device_display_name: String,
-    }
-    let request: LoginRequest = cx.body_json().await?;
-    tracing::debug!(req = tracing::field::debug(&request));
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    #[serde(rename = "type")]
+    login_type: LoginType,
+    identifier: Identifier,
+    password: Option<String>,
+    token: Option<String>,
+    device_id: Option<String>,
+    initial_device_display_name: String,
+}
 
-    let username = match request.identifier {
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum Identifier {
+    #[serde(rename = "m.id.user")]
+    Username {
+        user: String,
+    },
+    #[serde(rename = "m.id.thirdparty")]
+    ThirdParty {
+        medium: String,
+        address: String,
+    },
+    #[serde(rename = "m.id.phone")]
+    Phone {
+        country: String,
+        phone: String,
+    },
+}
+
+#[derive(Serialize)]
+pub struct LoginResponse {
+    user_id: String,
+    access_token: String,
+    device_id: String,
+}
+
+#[post("/login")]
+pub async fn login(
+    state: Data<Arc<ServerState>>,
+    req: Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, Error>
+{
+    let req = req.into_inner();
+    tracing::debug!(req = tracing::field::debug(&req));
+
+    let username = match req.identifier {
         Identifier::Username { user } => user,
         _ => return Err(Error::Unimplemented),
     };
-    let password = request.password.ok_or(Error::Unimplemented)?;
+    let password = req.password.ok_or(Error::Unimplemented)?;
     
-    let mut db = cx.state().db_pool.get_client().await?;
+    let mut db = state.db_pool.get_client().await?;
     if !db.verify_password(&username, &password).await? {
         return Err(Error::Forbidden);
     }
 
-    let device_id = request.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
+    let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
     let access_token = db.create_access_token(&username, &device_id).await?;
 
-    let user_id = format!("@{}:{}", username, cx.state().config.domain);
+    let user_id = format!("@{}:{}", username, state.config.domain);
     let access_token = format!("{}", access_token.to_hyphenated());
 
-    Ok(response::json(json!({
-        "user_id": user_id,
-        "access_token": access_token,
-        "device_id": device_id,
-    })))
+    Ok(Json(LoginResponse {
+        user_id,
+        access_token,
+        device_id,
+    }))
 }
 
-pub async fn logout(cx: Context<Arc<ServerState>>) -> ClientResult {
-    let token = get_access_token(&cx)?;
-    let mut db = cx.state().db_pool.get_client().await?;
-    db.delete_access_token(token).await?;
-    Ok(response::json(json!({})))
+#[post("/logout")]
+pub async fn logout(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    db.delete_access_token(token.0).await?;
+    Ok(Json(()))
 }
 
-pub async fn logout_all(cx: Context<Arc<ServerState>>) -> ClientResult {
-    let token = get_access_token(&cx)?;
-    let mut db = cx.state().db_pool.get_client().await?;
-    db.delete_all_access_tokens(token).await?;    
-    Ok(response::json(json!({})))
+#[post("/logout/all")]
+pub async fn logout_all(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    db.delete_all_access_tokens(token.0).await?;    
+    Ok(Json(()))
 }
 
-pub async fn register(mut cx: Context<Arc<ServerState>>) -> ClientResult {
-    #[derive(Debug, Deserialize)]
-    struct RegisterRequest {
-        auth: serde_json::Value,
-        bind_email: bool,
-        bind_msisdn: bool,
-        username: String,
-        password: String,
-        device_id: Option<String>,
-        initial_device_display_name: String,
-        inhibit_login: bool,
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    auth: serde_json::Value,
+    bind_email: bool,
+    bind_msisdn: bool,
+    username: String,
+    password: String,
+    device_id: Option<String>,
+    initial_device_display_name: String,
+    inhibit_login: bool,
+}
+
+#[post("/register")]
+pub async fn register(
+    state: Data<Arc<ServerState>>,
+    req: Json<RegisterRequest>,
+    http_req: HttpRequest
+) -> Result<Json<serde_json::Value>, Error> {
+    let req = req.into_inner();
+    let query_string = http_req.query_string();
+    match query_string.split('&').find(|s| s.starts_with("kind=")) {
+        Some("user") => {},
+        Some("guest") => return Err(Error::Unimplemented),
+        Some(x) => return Err(Error::InvalidParam(x.to_string())),
+        None => return Err(Error::MissingParam("kind".to_string())),
     }
-    let kind = cx.param::<String>("user_id")?;
-    match &*kind {
-        "user" => {},
-        "guest" => return Err(Error::Unimplemented),
-        _ => return Err(Error::InvalidParam(kind)),
-    }
-    let request: RegisterRequest = cx.body_json().await?;
-    tracing::debug!(req = tracing::field::debug(&request));
+    tracing::debug!(req = tracing::field::debug(&req));
 
     let salt: [u8; 16] = rand::random();
-    let password_hash = argon2::hash_encoded(request.password.as_bytes(), &salt, &Default::default())?;
+    let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
 
-    let mut db = cx.state().db_pool.get_client().await?;
-    db.create_user(&request.username, Some(&password_hash)).await?;
-    if request.inhibit_login {
-        return Ok(response::json(json!({
-            "user_id": request.username
+    let mut db = state.db_pool.get_client().await?;
+    db.create_user(&req.username, Some(&password_hash)).await?;
+    if req.inhibit_login {
+        return Ok(Json(json!({
+            "user_id": req.username
         })));
     }
     
-    let device_id = request.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
-    let access_token = db.create_access_token(&request.username, &device_id).await?;
+    let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
+    let access_token = db.create_access_token(&req.username, &device_id).await?;
 
-    let user_id = format!("@{}:{}", request.username, cx.state().config.domain);
+    let user_id = format!("@{}:{}", req.username, state.config.domain);
     let access_token = format!("{}", access_token.to_hyphenated());
 
-    Ok(response::json(json!({
+    Ok(Json(json!({
         "user_id": user_id,
         "access_token": access_token,
         "device_id": device_id
