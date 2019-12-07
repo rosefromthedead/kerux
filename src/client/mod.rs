@@ -4,8 +4,8 @@ use serde_json::json;
 mod auth;
 pub mod error;
 /*mod room;
-mod sync;
-mod user;*/
+mod sync;*/
+mod user;
 
 pub fn cs_api(cfg: &mut web::ServiceConfig) {
     /*app.middleware(
@@ -23,7 +23,12 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(auth::login)
         .service(auth::logout)
         .service(auth::logout_all)
-        .service(auth::register);
+        .service(auth::register)
+        .service(user::get_avatar_url)
+        .service(user::set_avatar_url)
+        .service(user::get_display_name)
+        .service(user::set_display_name)
+        .service(user::get_profile);
     /*    r0.at("/profile/:user_id")
         .get(user::get_profile);
     r0.at("/profile/:user_id/avatar_url")
