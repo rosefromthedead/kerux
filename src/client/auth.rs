@@ -101,7 +101,6 @@ pub async fn login(
 ) -> Result<Json<LoginResponse>, Error>
 {
     let req = req.into_inner();
-    tracing::debug!(req = tracing::field::debug(&req));
 
     let username = match req.identifier {
         Identifier::Username { user } => user,
@@ -167,7 +166,6 @@ pub async fn register(
         Some(x) => return Err(Error::InvalidParam(x.to_string())),
         None => return Err(Error::MissingParam("kind".to_string())),
     }
-    tracing::debug!(req = tracing::field::debug(&req));
 
     let salt: [u8; 16] = rand::random();
     let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
