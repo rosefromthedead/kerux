@@ -31,10 +31,9 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(user::set_display_name)
         .service(user::get_profile)
 
-        .service(room::create_room);
-/*
-    r0.at("/createRoom")
-        .post(room::create_room);*/
+        .service(room::create_room)
+        
+        .service(sync::sync);
 
     cfg.service(r0);
 }
