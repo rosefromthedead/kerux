@@ -67,7 +67,6 @@ impl ResponseError for Error {
         }
     }
     fn error_response(&self) -> HttpResponse {
-        tracing::debug!("{:?}", &self);
         use Error::*;
         let (errcode, error) = match self {
             Forbidden => {
@@ -137,8 +136,8 @@ impl ResponseError for Error {
         };
         HttpResponseBuilder::new(self.status_code())
             .json(json!({
-            "errcode": errcode,
-            "error": error
+                "errcode": errcode,
+                "error": error
             }))
     }
 }

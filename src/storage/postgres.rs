@@ -39,7 +39,7 @@ impl DbPool {
             });
         } else {
             let (client, conn) = pg::connect(&*self.db_address, NoTls).compat().await.map_err(|e| {
-                tracing::warn!("{}", e); e
+                log::warn!("{}", e); e
             })?;
             tokio::spawn(conn.compat().map(|_| ()));
             return Ok(ClientGuard {

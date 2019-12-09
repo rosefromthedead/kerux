@@ -134,8 +134,6 @@ pub async fn sync(
     let username = db.try_auth(token.0).await?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
-    tracing::debug!(req = tracing::field::debug(&req));
-
     let memberships = db.get_memberships_by_user(&user_id).await?;
     let mut join = HashMap::new();
     let mut invite = HashMap::new();
