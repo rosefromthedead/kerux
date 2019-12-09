@@ -140,7 +140,7 @@ impl ClientGuard {
     /// Returns the given user's avatar URL and display name, if present
     pub async fn get_profile(&mut self, user_id: &str) -> Result<(Option<String>, Option<String>), Error> {
         let db = self.inner.as_mut().unwrap();
-        let query = db.prepare("SELECT avatar_url, display_name FROM users WHERE name = $1;").compat().await?;
+        let query = db.prepare("SELECT avatar_url, display_name FROM users WHERE id = $1;").compat().await?;
         let mut rows = db.query(&query, &[&user_id]).compat();
         let row = match rows.next().await {
             Some(v) => v?,
@@ -299,7 +299,7 @@ impl ClientGuard {
 async fn handle_event(db: &mut Client, event: &PduV4) -> Result<(), DbError> {
     match &*event.ty {
         "m.room.member" => {
-            let membership = event.content.get("membership").unwrap();
+            let membership = event.content.get("membership").unwrap().as_str().unwrap();
             if membership != "leave" {
                 let stmt = db.prepare("
                     INSERT INTO room_memberships(user_id, room_id, membership, event_id)

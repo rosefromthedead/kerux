@@ -1,16 +1,15 @@
+use actix_web::{get, web::{Data, Json, Query}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
     sync::Arc
 };
-use tide::{response, querystring::ContextExt, Context};
 
 use crate::{
     client::{
-        auth::get_access_token,
+        auth::AccessToken,
         error::Error,
-        ClientResult,
     },
     events::{
         Event,
@@ -19,9 +18,9 @@ use crate::{
     ServerState,
 };
 
-// Provided in URL query params
+/// Provided in URL query params
 #[derive(Debug, Deserialize)]
-struct SyncRequest {
+pub struct SyncRequest {
     filter: String,
     since: String,
     full_state: bool,
@@ -30,7 +29,7 @@ struct SyncRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct SyncResponse {
+pub struct SyncResponse {
     next_batch: String,
     rooms: Option<Rooms>,
     presence: Option<Presence>,
@@ -125,13 +124,16 @@ struct Presence {
     events: Vec<KvPair>,
 }
 
-pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
-    let mut db = cx.state().db_pool.get_client().await?;
-    let access_token = get_access_token(&cx)?;
-    let username = db.try_auth(access_token).await?;
-    let user_id = format!("@{}:{}", username, cx.state().config.domain);
+#[get("/sync")]
+pub async fn sync(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    req: Query<SyncRequest>,
+) -> Result<Json<SyncResponse>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
 
-    let req: SyncRequest = cx.url_query().map_err(|_| Error::InvalidParam(String::new()))?;
     tracing::debug!(req = tracing::field::debug(&req));
 
     let memberships = db.get_memberships_by_user(&user_id).await?;
@@ -174,12 +176,14 @@ pub async fn sync(mut cx: Context<Arc<ServerState>>) -> ClientResult {
                 });
             },
             Membership::Invite => {},
-            Membership::Leave => {}
+            Membership::Leave => {},
+            Membership::Knock => {},
+            Membership::Ban => {},
         }
     }
     let rooms = Rooms { join, invite, leave };
 
-    Ok(response::json(SyncResponse {
+    Ok(Json(SyncResponse {
         next_batch: String::new(),
         rooms: Some(rooms),
         presence: None,
