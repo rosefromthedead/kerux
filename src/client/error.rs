@@ -1,4 +1,5 @@
 use actix_web::{
+    dev::HttpResponseBuilder,
     error::JsonPayloadError,
     http::StatusCode,
     web::HttpResponse,
@@ -134,10 +135,11 @@ impl ResponseError for Error {
                 e.clone())
             }
         };
-        HttpResponse::with_body(self.status_code(), json!({
+        HttpResponseBuilder::new(self.status_code())
+            .json(json!({
             "errcode": errcode,
             "error": error
-        }).to_string().into())
+            }))
     }
 }
 
