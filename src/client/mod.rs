@@ -4,7 +4,7 @@ use serde_json::json;
 mod auth;
 pub mod error;
 mod room;
-//mod sync;
+mod sync;
 mod user;
 
 pub fn cs_api(cfg: &mut web::ServiceConfig) {
