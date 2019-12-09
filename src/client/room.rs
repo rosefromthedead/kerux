@@ -1,25 +1,24 @@
+use actix_web::{post, web::{Data, Json}};
 use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
 use std::{
     collections::HashMap,
     sync::Arc,
 };
-use tide::{response, Context};
 
 use crate::{
     client::{
-        auth::get_access_token,
+        auth::AccessToken,
         error::Error,
-        ClientResult,
     },
     events::{
-        self, room, PduV4, UnhashedPdu, into_json_map
+        room, UnhashedPdu, into_json_map
     },
     ServerState,
 };
 
 #[derive(Deserialize)]
-struct CreateRoomRequest {
+pub struct CreateRoomRequest {
     visibility: RoomVisibility,
     room_alias_name: Option<String>,
     name: Option<String>,
@@ -65,21 +64,24 @@ enum Preset {
     PublicChat,
 }
 
-pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
-    let mut db = cx.state().db_pool.get_client().await?;
-    let access_token = get_access_token(&cx)?;
-    let username = db.try_auth(access_token).await?;
-    let user_id = format!("@{}:{}", username, cx.state().config.domain);
+#[post("/createRoom")]
+pub async fn create_room(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    req: Json<CreateRoomRequest>,
+) -> Result<Json<JsonValue>, Error> {
+    let req = req.into_inner();
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
 
-    let req_string = String::from_utf8(cx.body_bytes().await?)?;
-    let req: CreateRoomRequest = serde_json::from_str(&req_string)?;
     let room_version = req.room_version.unwrap_or("4".to_string());
     let is_direct = req.is_direct.unwrap_or(false);
     if room_version != "4" {
         return Err(Error::UnsupportedRoomVersion);
     }
 
-    let room_id = format!("!{:016X}:{}", rand::random::<i64>(), cx.state().config.domain);
+    let room_id = format!("!{:016X}:{}", rand::random::<i64>(), state.config.domain);
     let mut events = Vec::new();
     let now = chrono::Utc::now().timestamp_millis();
 
@@ -88,7 +90,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             Some(v) => v,
             None => HashMap::new(),
         };
-        into_json_map(room::Create {
+        into_json_map(&room::Create {
             creator: user_id.clone(),
             room_version: Some(room_version),
             predecessor: None,
@@ -98,7 +100,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let room_create_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.create".to_string(),
         state_key: Some(String::new()),
@@ -112,7 +114,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     
     let creator_join = {
         let (avatar_url, displayname) = db.get_profile(&user_id).await?;
-        into_json_map(room::Member {
+        into_json_map(&room::Member {
             avatar_url,
             displayname,
             membership: room::Membership::Join,
@@ -122,7 +124,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let creator_join_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.member".to_string(),
         state_key: Some(user_id.clone()),
@@ -137,11 +139,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let power_levels_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.power_levels".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(req.power_level_content_override.unwrap_or_default()),
+        content: into_json_map(&req.power_level_content_override.unwrap_or_default()),
         prev_events: vec![creator_join_event.hashes.sha256.clone()],
         depth: 2,
         auth_events: Vec::new(),
@@ -164,11 +166,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let join_rules_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.join_rules".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(room::JoinRules { join_rule }),
+        content: into_json_map(&room::JoinRules { join_rule }),
         prev_events: vec![power_levels_event_hash.clone()],
         depth: 3,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -178,11 +180,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let history_visibility_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.history_visibility".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(room::HistoryVisibility { history_visibility }),
+        content: into_json_map(&room::HistoryVisibility { history_visibility }),
         prev_events: vec![join_rules_event.hashes.sha256.clone()],
         depth: 4,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -192,11 +194,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
     let guest_access_event = UnhashedPdu {
         room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: cx.state().config.domain.clone(),
+        origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.guest_access".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(room::GuestAccess { guest_access }),
+        content: into_json_map(&room::GuestAccess { guest_access }),
         prev_events: vec![history_visibility_event.hashes.sha256.clone()],
         depth: 5,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -216,7 +218,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
-                origin: cx.state().config.domain.clone(),
+                origin: state.config.domain.clone(),
                 origin_server_ts: now,
                 ty: event.ty,
                 state_key: Some(event.state_key),
@@ -236,11 +238,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
-                origin: cx.state().config.domain.clone(),
+                origin: state.config.domain.clone(),
                 origin_server_ts: now,
                 ty: "m.room.name".to_string(),
                 state_key: Some(String::new()),
-                content: into_json_map(room::Name { name }),
+                content: into_json_map(&room::Name { name }),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -256,11 +258,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
-                origin: cx.state().config.domain.clone(),
+                origin: state.config.domain.clone(),
                 origin_server_ts: now,
                 ty: "m.room.topic".to_string(),
                 state_key: Some(String::new()),
-                content: into_json_map(room::Topic { topic }),
+                content: into_json_map(&room::Topic { topic }),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -276,11 +278,11 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
             UnhashedPdu {
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
-                origin: cx.state().config.domain.clone(),
+                origin: state.config.domain.clone(),
                 origin_server_ts: now,
                 ty: "m.room.member".to_string(),
                 state_key: Some(invitee),
-                content: into_json_map(room::Member {
+                content: into_json_map(&room::Member {
                     avatar_url: None,
                     displayname: None,
                     membership: room::Membership::Invite,
@@ -297,7 +299,7 @@ pub async fn create_room(mut cx: Context<Arc<ServerState>>) -> ClientResult {
 
     db.add_events(events).await?;
 
-    Ok(response::json(json!({
+    Ok(Json(json!({
         "room_id": room_id
     })))
 }
