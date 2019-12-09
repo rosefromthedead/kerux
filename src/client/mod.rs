@@ -3,8 +3,8 @@ use serde_json::json;
 
 mod auth;
 pub mod error;
-/*mod room;
-mod sync;*/
+mod room;
+//mod sync;
 mod user;
 
 pub fn cs_api(cfg: &mut web::ServiceConfig) {
@@ -24,20 +24,15 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(auth::logout)
         .service(auth::logout_all)
         .service(auth::register)
+
         .service(user::get_avatar_url)
         .service(user::set_avatar_url)
         .service(user::get_display_name)
         .service(user::set_display_name)
-        .service(user::get_profile);
-    /*    r0.at("/profile/:user_id")
-        .get(user::get_profile);
-    r0.at("/profile/:user_id/avatar_url")
-        .get(user::get_avatar_url)
-        .put(user::set_avatar_url);
-    r0.at("/profile/:user_id/displayname")
-        .get(user::get_display_name)
-        .put(user::set_display_name);
+        .service(user::get_profile)
 
+        .service(room::create_room);
+/*
     r0.at("/createRoom")
         .post(room::create_room);*/
 
