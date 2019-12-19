@@ -15,6 +15,7 @@ mod storage;
 #[derive(Deserialize)]
 pub struct Config {
     domain: String,
+    bind_address: String,
 }
 
 pub struct ServerState {
@@ -41,6 +42,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let db_pool = storage::postgres::DbPool::new(String::from("host=/run/postgresql/ user=postgres dbname=matrix"), 64);
     let server_state = Arc::new(ServerState { config, db_pool });
 
+    let server_state2 = Arc::clone(&server_state);
     actix_web::HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
@@ -48,7 +50,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .data(JsonConfig::default().error_handler(|e, _req| client::error::Error::from(e).into()))
             .service(web::scope("/_matrix/client").configure(client::cs_api))
     })
-    .bind("0.0.0.0:8080")?
+    .bind(&server_state2.config.bind_address)?
     .run()?;
 
     Ok(())
