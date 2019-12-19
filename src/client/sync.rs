@@ -21,11 +21,28 @@ use crate::{
 /// Provided in URL query params
 #[derive(Debug, Deserialize)]
 pub struct SyncRequest {
-    filter: String,
-    since: String,
+    #[serde(default)]
+    filter: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
     full_state: bool,
-    set_presence: String,
+    #[serde(default = "default_set_presence")]
+    set_presence: SetPresence,
+    #[serde(default)]
     timeout: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename = "snake_case")]
+enum SetPresence {
+    Offline,
+    Online,
+    Unavailable,
+}
+
+fn default_set_presence() -> SetPresence {
+    SetPresence::Online
 }
 
 #[derive(Debug, Serialize)]
@@ -154,7 +171,7 @@ pub async fn sync(
                     State { events: Vec::new() }
                 };
                 let timeline = Timeline {
-                    events: db.get_events_since(&room_id, &req.since).await?,
+                    events: db.get_events_since(&room_id, req.since.as_ref().map(|s| &**s)).await?,
                     limited: false,
                     prev_batch: String::from("placeholder_prev_batch"),
                 };
