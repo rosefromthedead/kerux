@@ -4,7 +4,7 @@ use serde_json::json;
 mod auth;
 pub mod error;
 mod room;
-mod sync;
+mod room_events;
 mod user;
 
 pub fn cs_api(cfg: &mut web::ServiceConfig) {
@@ -33,7 +33,7 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
 
         .service(room::create_room)
         
-        .service(sync::sync);
+        .service(room_events::sync);
 
     cfg.service(r0);
 }
