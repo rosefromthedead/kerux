@@ -267,10 +267,11 @@ impl ClientGuard {
         Ok(ret)
 }
 
-    pub async fn get_events_since(&mut self, room_id: &str, since: &str)
+    pub async fn get_events_since(&mut self, room_id: &str, since: Option<&str>)
             -> Result<Vec<Event>, Error> {
         let db = self.inner.as_mut().unwrap();
-        let since: i64 = since.parse()
+        let since: i64 = since.map(str::parse)
+            .unwrap_or(Ok(0))
             .map_err(|_| Error::InvalidParam(String::from("invalid since param")))?;
         let query = db.prepare("
             SELECT
@@ -316,6 +317,13 @@ async fn handle_event(db: &mut Client, event: &PduV4) -> Result<(), DbError> {
                 db.execute(&stmt, &[&event.state_key, &event.room_id]).compat().await?;
             }
         },
+        "m.room.create" => {
+            let stmt = db.prepare("
+                INSERT INTO rooms(id)
+                    VALUES ($1);
+            ").compat().await?;
+            db.execute(&stmt, &[&event.room_id]).compat().await?;
+        }
         _ => {},
     }
     Ok(())
