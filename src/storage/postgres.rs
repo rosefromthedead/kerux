@@ -138,10 +138,10 @@ impl ClientGuard {
     }
 
     /// Returns the given user's avatar URL and display name, if present
-    pub async fn get_profile(&mut self, user_id: &str) -> Result<(Option<String>, Option<String>), Error> {
+    pub async fn get_profile(&mut self, username: &str) -> Result<(Option<String>, Option<String>), Error> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("SELECT avatar_url, display_name FROM users WHERE id = $1;").compat().await?;
-        let mut rows = db.query(&query, &[&user_id]).compat();
+        let mut rows = db.query(&query, &[&username]).compat();
         let row = match rows.next().await {
             Some(v) => v?,
             None => return Err(Error::NotFound),
@@ -151,17 +151,17 @@ impl ClientGuard {
         Ok((avatar_url, display_name))
     }
 
-    pub async fn set_avatar_url(&mut self, user_id: &str, avatar_url: &str) -> Result<(), DbError> {
+    pub async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("UPDATE users SET avatar_url = $1 WHERE id = $2;").compat().await?;
-        db.execute(&stmt, &[&avatar_url, &user_id]).compat().await?;
+        db.execute(&stmt, &[&avatar_url, &username]).compat().await?;
         Ok(())
     }
 
-    pub async fn set_display_name(&mut self, user_id: &str, display_name: &str) -> Result<(), DbError> {
+    pub async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("UPDATE users SET display_name = $1 WHERE id = $2;").compat().await?;
-        db.execute(&stmt, &[&display_name, &user_id]).compat().await?;
+        db.execute(&stmt, &[&display_name, &username]).compat().await?;
         Ok(())
     }
 
