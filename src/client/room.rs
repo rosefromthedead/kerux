@@ -113,7 +113,7 @@ pub async fn create_room(
     }.finalize();
     
     let creator_join = {
-        let (avatar_url, displayname) = db.get_profile(&user_id).await?;
+        let (avatar_url, displayname) = db.get_profile(&username).await?;
         into_json_map(&room::Member {
             avatar_url,
             displayname,
