@@ -1,6 +1,6 @@
 use actix_web::{post, web::{Data, Json}};
 use serde::Deserialize;
-use serde_json::{Map, Value as JsonValue, json};
+use serde_json::{Value as JsonValue, json, to_value};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -12,7 +12,7 @@ use crate::{
         error::Error,
     },
     events::{
-        room, UnhashedPdu, into_json_map
+        room, UnhashedPdu,
     },
     ServerState,
 };
@@ -53,7 +53,7 @@ struct StateEvent {
     ty: String,
     #[serde(default)]
     state_key: String,
-    content: Map<String, JsonValue>,
+    content: JsonValue,
 }
 
 #[derive(Deserialize)]
@@ -90,12 +90,12 @@ pub async fn create_room(
             Some(v) => v,
             None => HashMap::new(),
         };
-        into_json_map(&room::Create {
+        to_value(&room::Create {
             creator: user_id.clone(),
             room_version: Some(room_version),
             predecessor: None,
             extra,
-        })
+        }).unwrap()
     };
     let room_create_event = UnhashedPdu {
         room_id: room_id.clone(),
@@ -114,12 +114,12 @@ pub async fn create_room(
     
     let creator_join = {
         let (avatar_url, displayname) = db.get_profile(&username).await?;
-        into_json_map(&room::Member {
+        to_value(&room::Member {
             avatar_url,
             displayname,
             membership: room::Membership::Join,
             is_direct,
-        })
+        }).unwrap()
     };
     let creator_join_event = UnhashedPdu {
         room_id: room_id.clone(),
@@ -143,7 +143,7 @@ pub async fn create_room(
         origin_server_ts: now,
         ty: "m.room.power_levels".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(&req.power_level_content_override.unwrap_or_default()),
+        content: to_value(&req.power_level_content_override.unwrap_or_default()).unwrap(),
         prev_events: vec![creator_join_event.hashes.sha256.clone()],
         depth: 2,
         auth_events: Vec::new(),
@@ -170,7 +170,7 @@ pub async fn create_room(
         origin_server_ts: now,
         ty: "m.room.join_rules".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(&room::JoinRules { join_rule }),
+        content: to_value(&room::JoinRules { join_rule }).unwrap(),
         prev_events: vec![power_levels_event_hash.clone()],
         depth: 3,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -184,7 +184,7 @@ pub async fn create_room(
         origin_server_ts: now,
         ty: "m.room.history_visibility".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(&room::HistoryVisibility { history_visibility }),
+        content: to_value(&room::HistoryVisibility { history_visibility }).unwrap(),
         prev_events: vec![join_rules_event.hashes.sha256.clone()],
         depth: 4,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -198,7 +198,7 @@ pub async fn create_room(
         origin_server_ts: now,
         ty: "m.room.guest_access".to_string(),
         state_key: Some(String::new()),
-        content: into_json_map(&room::GuestAccess { guest_access }),
+        content: to_value(&room::GuestAccess { guest_access }).unwrap(),
         prev_events: vec![history_visibility_event.hashes.sha256.clone()],
         depth: 5,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -207,6 +207,7 @@ pub async fn create_room(
     }.finalize();
 
     events.push(room_create_event);
+    events.push(creator_join_event);
     events.push(power_levels_event);
     events.push(join_rules_event);
     events.push(history_visibility_event);
@@ -242,7 +243,7 @@ pub async fn create_room(
                 origin_server_ts: now,
                 ty: "m.room.name".to_string(),
                 state_key: Some(String::new()),
-                content: into_json_map(&room::Name { name }),
+                content: to_value(&room::Name { name }).unwrap(),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -262,7 +263,7 @@ pub async fn create_room(
                 origin_server_ts: now,
                 ty: "m.room.topic".to_string(),
                 state_key: Some(String::new()),
-                content: into_json_map(&room::Topic { topic }),
+                content: to_value(&room::Topic { topic }).unwrap(),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -282,12 +283,12 @@ pub async fn create_room(
                 origin_server_ts: now,
                 ty: "m.room.member".to_string(),
                 state_key: Some(invitee),
-                content: into_json_map(&room::Member {
+                content: to_value(&room::Member {
                     avatar_url: None,
                     displayname: None,
                     membership: room::Membership::Invite,
                     is_direct,
-                }),
+                }).unwrap(),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -297,7 +298,7 @@ pub async fn create_room(
         );
     }
 
-    db.add_events(events).await?;
+    db.add_events(&events).await?;
 
     Ok(Json(json!({
         "room_id": room_id

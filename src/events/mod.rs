@@ -5,25 +5,23 @@ use serde_json::{Map, Value as JsonValue};
 
 pub mod room;
 
-/// Turns a serializable value into a `serde_json::Map<String, Value>`.
-///
-/// Panics if the given value cannot be serialized into JSON or if it is not an object.
-pub fn into_json_map(value: &impl Serialize) -> Map<String, JsonValue> {
-    match serde_json::to_value(value).expect("given value cannot be serialized into json") {
-        JsonValue::Object(map) => map,
-        _ => panic!("cannot turn non-object value into json object"),
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct Event {
     pub content: JsonValue,
     #[serde(rename = "type")]
     pub ty: String,
     pub event_id: String,
+    /// Sometimes this is present outside this struct, in which case None is used
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
     pub sender: String,
     pub origin_server_ts: i64,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unsigned: Option<JsonValue>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state_key: Option<String>,
 }
 
@@ -38,7 +36,7 @@ pub struct UnhashedPdu {
     #[serde(rename = "type")]
     pub ty: String,
     pub state_key: Option<String>,
-    pub content: Map<String, JsonValue>,
+    pub content: JsonValue,
     pub prev_events: Vec<String>,
     pub depth: i64,
     pub auth_events: Vec<String>,
@@ -55,7 +53,7 @@ pub struct PduV4 {
     pub origin_server_ts: i64,
     pub ty: String,
     pub state_key: Option<String>,
-    pub content: Map<String, JsonValue>,
+    pub content: JsonValue,
     pub prev_events: Vec<String>,
     pub depth: i64,
     pub auth_events: Vec<String>,

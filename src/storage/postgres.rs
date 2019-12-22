@@ -79,17 +79,17 @@ impl Drop for ClientGuard {
 
 // Eventually this will become a trait to allow more storage backends
 impl ClientGuard {
-    pub async fn create_user(&mut self, user_id: &str, password_hash: Option<&str>) -> Result<(), DbError> {
+    pub async fn create_user(&mut self, username: &str, password_hash: Option<&str>) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("INSERT INTO users(id, password_hash) VALUES ($1, $2);").compat().await?;
-        db.execute(&stmt, &[&user_id, &password_hash]).compat().await?;
+        db.execute(&stmt, &[&username, &password_hash]).compat().await?;
         Ok(())
     }
 
-    pub async fn verify_password(&mut self, user_id: &str, password: &str) -> Result<bool, DbError> {
+    pub async fn verify_password(&mut self, username: &str, password: &str) -> Result<bool, DbError> {
         let db = self.inner.as_mut().unwrap();
         let get_user = db.prepare("SELECT password_hash FROM users WHERE id=$1;").compat().await?;
-        let mut rows = db.query(&get_user, &[&user_id]).compat(); 
+        let mut rows = db.query(&get_user, &[&username]).compat(); 
         let user = match rows.next().await {
             Some(v) => v?,
             None => return Ok(false),
@@ -101,11 +101,11 @@ impl ClientGuard {
         }
     }
 
-    pub async fn create_access_token(&mut self, user_id: &str, device_id: &str) -> Result<uuid::Uuid, DbError> {
+    pub async fn create_access_token(&mut self, username: &str, device_id: &str) -> Result<uuid::Uuid, DbError> {
         let db = self.inner.as_mut().unwrap();
         let access_token = uuid::Uuid::new_v4();
-        let insert_token = db.prepare("INSERT INTO access_tokens(token, user_id, device_id) VALUES ($1, $2, $3);").compat().await?;
-        db.execute(&insert_token, &[&access_token, &user_id, &device_id]).compat().await?;
+        let insert_token = db.prepare("INSERT INTO access_tokens(token, username, device_id) VALUES ($1, $2, $3);").compat().await?;
+        db.execute(&insert_token, &[&access_token, &username, &device_id]).compat().await?;
         Ok(access_token)
     }
 
@@ -119,10 +119,10 @@ impl ClientGuard {
     pub async fn delete_all_access_tokens(&mut self, token: uuid::Uuid) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
-            WITH id AS (
-                SELECT user_id FROM access_tokens WHERE token = $1
+            WITH name AS (
+                SELECT username FROM access_tokens WHERE token = $1
             )
-            DELETE FROM access_tokens WHERE user_id IN id;
+            DELETE FROM access_tokens WHERE username IN name;
         ").compat().await?;
         db.execute(&stmt, &[&token]).compat().await?;
         Ok(())
@@ -130,10 +130,10 @@ impl ClientGuard {
 
     pub async fn try_auth(&mut self, token: uuid::Uuid) -> Result<String, Error> {
         let db = self.inner.as_mut().unwrap();
-        let query = db.prepare("SELECT user_id FROM access_tokens WHERE token = $1;").compat().await?;
+        let query = db.prepare("SELECT username FROM access_tokens WHERE token = $1;").compat().await?;
         let mut rows = db.query(&query, &[&token]).compat();
         let row = rows.next().await.ok_or(Error::UnknownToken)??;
-        let id = row.try_get("user_id")?;
+        let id = row.get("username");
         Ok(id)
     }
 
@@ -166,7 +166,7 @@ impl ClientGuard {
     }
 
     pub async fn add_events(&mut self,
-        events: impl IntoIterator<Item = PduV4>
+        events: impl IntoIterator<Item = &PduV4>
     ) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
@@ -206,17 +206,31 @@ impl ClientGuard {
         db.query(&query, &[&user_id]).compat()
             .map(|row| {
                 let row = row?;
-                let membership = match row.get("membership") {
-                   "ban" => Membership::Ban,
-                   "invite" => Membership::Invite,
-                   "join" => Membership::Join,
-                   "knock" => Membership::Knock,
-                   "leave" => Membership::Leave,
-                   x => panic!("invalid value {} stored in membership row", x),
-                };
+                let membership_str: &str = row.get("membership");
+                let membership = membership_str.parse().unwrap();
                 Ok((row.get("room_id"), membership))
             })
             .try_collect::<Vec<(_, _)>>().await
+    }
+
+    pub async fn get_membership(&mut self, user_id: &str, room_id: &str) 
+            -> Result<Option<Membership>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT membership
+                FROM room_memberships
+                WHERE user_id = $1 AND room_id = $2;
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&user_id, &room_id]).compat();
+        match rows.next().await {
+            Some(row) => {
+                let row = row?;
+                let membership_str: &str = row.get("membership");
+                let membership = membership_str.parse().unwrap();
+                Ok(Some(membership))
+            },
+            None => Ok(None),
+        }
     }
 
     pub async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), DbError> {
@@ -244,28 +258,57 @@ impl ClientGuard {
     pub async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
-            SELECT DISTINCT ON (state_key)
-                content, type, event_id, sender, origin_server_ts, unsigned, state_key
+            SELECT DISTINCT ON (type, state_key)
+                content, type, hash, sender, origin_server_ts, unsigned, state_key
                 FROM room_events
                 WHERE room_id = $1 AND state_key != NULL
-                ORDER BY state_key, depth DESC;
+                ORDER BY type, state_key, depth DESC;
         ").compat().await?;
         let mut rows = db.query(&query, &[&room_id]).compat();
         let mut ret = Vec::new();
         while let Some(row) = rows.next().await {
             let row = row?;
             ret.push(Event {
-                content: row.try_get("content")?,
-                ty: row.try_get("type")?,
-                event_id: row.try_get("event_id")?,
-                sender: row.try_get("sender")?,
-                origin_server_ts: row.try_get("origin_server_ts")?,
-                unsigned: row.try_get("unsigned")?,
-                state_key: row.try_get("state_key")?,
+                content: row.get("content"),
+                ty: row.get("type"),
+                event_id: row.get("hash"),
+                room_id: None,
+                sender: row.get("sender"),
+                origin_server_ts: row.get("origin_server_ts"),
+                unsigned: row.get("unsigned"),
+                state_key: row.get("state_key"),
             });
         }
         Ok(ret)
-}
+    }
+
+    pub async fn get_state_event(&mut self, room_id: &str, event_type: &str, state_key: &str)
+            -> Result<Option<Event>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT DISTINCT ON (state_key)
+                content, type, hash, sender, origin_server_ts, unsigned, state_key
+                FROM room_events
+                WHERE room_id = $1 AND type = $2 AND state_key = $3
+                ORDER BY state_key, depth DESC;
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&room_id, &event_type, &state_key]).compat();
+        if let Some(row) = rows.next().await {
+            let row = row?;
+            Ok(Some(Event {
+                content: row.get("content"),
+                ty: row.get("type"),
+                event_id: row.get("hash"),
+                room_id: None,
+                sender: row.get("sender"),
+                origin_server_ts: row.get("origin_server_ts"),
+                unsigned: row.get("unsigned"),
+                state_key: row.get("state_key"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 
     pub async fn get_events_since(&mut self, room_id: &str, since: Option<&str>)
             -> Result<Vec<Event>, Error> {
@@ -275,25 +318,75 @@ impl ClientGuard {
             .map_err(|_| Error::InvalidParam(String::from("invalid since param")))?;
         let query = db.prepare("
             SELECT
-            content, type, event_id, sender, origin_server_ts, unsigned, state_key
-            FROM room_events
-            WHERE room_id = $1 AND ordering > $2;
+                content, type, hash, sender, origin_server_ts, unsigned, state_key
+                FROM room_events
+                WHERE room_id = $1 AND ordering > $2;
         ").compat().await?;
         let mut rows = db.query(&query, &[&room_id, &since]).compat();
         let mut ret = Vec::new();
         while let Some(row) = rows.next().await {
             let row = row?;
             ret.push(Event {
-                content: row.try_get("content")?,
-                ty: row.try_get("type")?,
-                event_id: row.try_get("event_id")?,
-                sender: row.try_get("sender")?,
-                origin_server_ts: row.try_get("origin_server_ts")?,
-                unsigned: row.try_get("unsigned")?,
-                state_key: row.try_get("state_key")?,
+                content: row.get("content"),
+                ty: row.get("type"),
+                event_id: row.get("hash"),
+                room_id: None,
+                sender: row.get("sender"),
+                origin_server_ts: row.get("origin_server_ts"),
+                unsigned: row.get("unsigned"),
+                state_key: row.get("state_key"),
             });
         }
         Ok(ret)
+    }
+
+    pub async fn get_event(&mut self, room_id: &str, event_id: &str)
+            -> Result<Option<Event>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT
+                content, type, hash, room_id, sender, origin_server_ts, unsigned, state_key
+                FROM room_events
+                WHERE room_id = $1 AND event_id = $2;
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&room_id, &event_id]).compat();
+        if let Some(row) = rows.next().await {
+            let row = row?;
+            Ok(Some(Event {
+                content: row.get("content"),
+                ty: row.get("type"),
+                event_id: row.get("hash"),
+                room_id: Some(row.get("room_id")),
+                sender: row.get("sender"),
+                origin_server_ts: row.get("origin_server_ts"),
+                unsigned: row.get("unsigned"),
+                state_key: row.get("state_key"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_prev_event_ids(&mut self, room_id: &str)
+            -> Result<Option<(i64, Vec<String>)>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT (depth, hash) FROM room_events 
+                WHERE depth = (SELECT MAX(depth) FROM room_events WHERE room_id = $1);
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&room_id]).compat();
+        let mut ret = Vec::new();
+        let mut depth = 0;
+        while let Some(row) = rows.next().await {
+            let row = row?;
+            ret.push(row.get("hash"));
+            depth = row.get("depth");   // same every time but oh well
+        }
+        if ret.len() != 0 {
+            return Ok(Some((depth, ret)));
+        } else {
+            return Ok(None);
+        }
     }
 }
 
@@ -305,7 +398,7 @@ async fn handle_event(db: &mut Client, event: &PduV4) -> Result<(), DbError> {
                 let stmt = db.prepare("
                     INSERT INTO room_memberships(user_id, room_id, membership, event_id)
                         VALUES ($1, $2, $3, $4)
-                        ON CONFLICT DO UPDATE SET membership = $3, event_id = $4;
+                        ON CONFLICT(user_id, room_id) DO UPDATE SET membership = $3, event_id = $4;
                 ").compat().await?;
                 db.execute(&stmt,
                     &[&event.state_key, &event.room_id, &membership, &event.hashes.sha256]

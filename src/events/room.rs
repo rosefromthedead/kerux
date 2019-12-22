@@ -125,7 +125,7 @@ pub struct Member {
     pub is_direct: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Membership {
     Invite,
@@ -133,4 +133,34 @@ pub enum Membership {
     Knock,
     Leave,
     Ban,
+}
+
+#[derive(Debug)]
+pub struct InvalidMembership(String);
+
+impl std::str::FromStr for Membership {
+    type Err = InvalidMembership;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ban" => Ok(Membership::Ban),
+            "invite" => Ok(Membership::Invite),
+            "join" => Ok(Membership::Join),
+            "knock" => Ok(Membership::Knock),
+            "leave" => Ok(Membership::Leave),
+            x => Err(InvalidMembership(x.to_string())),
+        }
+    }
+}
+
+impl ToString for Membership {
+    fn to_string(&self) -> String {
+        use Membership::*;
+        match self {
+            Ban => "ban",
+            Invite => "invite",
+            Join => "join",
+            Knock => "knock",
+            Leave => "leave",
+        }.to_string()
+    }
 }

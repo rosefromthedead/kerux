@@ -33,7 +33,14 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
 
         .service(room::create_room)
         
-        .service(room_events::sync);
+        .service(room_events::sync)
+        .service(room_events::get_event)
+        .service(room_events::get_state_event_no_key)
+        .service(room_events::get_state_event_key)
+        .service(room_events::get_state)
+        .service(room_events::get_members)
+        .service(room_events::send_state_event)
+        .service(room_events::send_event);
 
     cfg.service(r0);
 }
