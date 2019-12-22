@@ -6,7 +6,10 @@ use futures::{
 };
 use pg::{Client, Error as DbError, NoTls};
 use serde_json::{Value as JsonValue, to_value as to_json_value};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::Arc
+};
 
 use crate::{
     client::error::Error,
@@ -371,7 +374,7 @@ impl ClientGuard {
             -> Result<Option<(i64, Vec<String>)>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
-            SELECT (depth, hash) FROM room_events 
+            SELECT depth, hash FROM room_events 
                 WHERE depth = (SELECT MAX(depth) FROM room_events WHERE room_id = $1);
         ").compat().await?;
         let mut rows = db.query(&query, &[&room_id]).compat();
@@ -387,6 +390,21 @@ impl ClientGuard {
         } else {
             return Ok(None);
         }
+    }
+
+    pub async fn get_user_account_data(&mut self, username: &str)
+            -> Result<HashMap<String, JsonValue>, DbError> {
+        let db = self.inner.as_mut().unwrap();
+        let query = db.prepare("
+            SELECT (type, content) FROM user_account_data WHERE username = $1;
+        ").compat().await?;
+        let mut rows = db.query(&query, &[&username]).compat();
+        let mut ret = HashMap::new();
+        while let Some(row) = rows.next().await {
+            let row = row?;
+            ret.insert(row.get("type"), row.get("content"));
+        }
+        Ok(ret)
     }
 }
 

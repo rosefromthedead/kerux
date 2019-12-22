@@ -50,7 +50,7 @@ pub struct SyncResponse {
     next_batch: String,
     rooms: Option<Rooms>,
     presence: Option<Presence>,
-    account_data: Option<AccountData>,
+    account_data: AccountData,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,11 +198,22 @@ pub async fn sync(
     }
     let rooms = Rooms { join, invite, leave };
 
+    let account_data_map = db.get_user_account_data(&username).await?;
+    let mut account_data_events = Vec::new();
+    for (key, value) in account_data_map {
+        account_data_events.push(KvPair {
+            ty: key,
+            content: value,
+        });
+    }
+
     Ok(Json(SyncResponse {
         next_batch: String::new(),
         rooms: Some(rooms),
         presence: None,
-        account_data: None,
+        account_data: AccountData {
+            events: account_data_events,
+        },
     }))
 }
 
