@@ -1,4 +1,4 @@
-use actix_web::{get, web::{Data, Json, Query}};
+use actix_web::{get, put, web::{Data, Json, Path, Query}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
@@ -12,7 +12,7 @@ use crate::{
         error::Error,
     },
     events::{
-        Event,
+        Event, UnhashedPdu,
         room::Membership,
     },
     ServerState,
@@ -203,5 +203,241 @@ pub async fn sync(
         rooms: Some(rooms),
         presence: None,
         account_data: None,
+    }))
+}
+
+#[get("/rooms/{room_id}/event/{event_id}")]
+pub async fn get_event(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    path_args: Path<(String, String)>,
+) -> Result<Json<Event>, Error> {
+    let (room_id, event_id) = path_args.into_inner();
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+
+    if db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? != Some(Membership::Join) {
+        return Err(Error::Forbidden);
+    }
+
+    match db.get_event(&room_id, &event_id).await? {
+        Some(event) => Ok(Json(event)),
+        None => Err(Error::NotFound),
+    }
+}
+
+#[get("/rooms/{room_id}/state/{event_id}")]
+pub async fn get_state_event_no_key(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    path_args: Path<(String, String)>,
+) -> Result<Json<Event>, Error> {
+    let (room_id, event_type) = path_args.into_inner();
+    get_state_event_inner(state, token, (room_id, event_type, String::new())).await
+}
+
+#[get("/rooms/{room_id}/state/{event_id}/{state_key}")]
+pub async fn get_state_event_key(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    path_args: Path<(String, String, String)>,
+) -> Result<Json<Event>, Error> {
+    get_state_event_inner(state, token, path_args.into_inner()).await
+}
+
+pub async fn get_state_event_inner(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    (room_id, event_type, state_key): (String, String, String),
+) -> Result<Json<Event>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+
+    if db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? != Some(Membership::Join) {
+        return Err(Error::Forbidden);
+    }
+
+    match db.get_state_event(&room_id, &event_type, &state_key).await? {
+        Some(event) => Ok(Json(event)),
+        None => Err(Error::NotFound),
+    }
+}
+
+#[get("/rooms/{room_id}/state")]
+pub async fn get_state(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    room_id: Path<String>,
+) -> Result<Json<Vec<Event>>, Error> {
+    let room_id = room_id.into_inner();
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+
+    match db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? {
+        Some(Membership::Join) => {},
+        Some(_) => return Err(Error::Unimplemented),
+        None => return Err(Error::Forbidden),
+    }
+
+    let state = db.get_full_state(&room_id).await?;
+    Ok(Json(state))
+}
+
+#[derive(Deserialize)]
+pub struct MembersRequest {
+    at: String,
+    #[serde(default)]
+    membership: Option<Membership>,
+    #[serde(default)]
+    not_membership: Option<Membership>,
+}
+
+#[derive(Serialize)]
+pub struct MembersResponse {
+    chunk: Vec<Event>,
+}
+
+#[get("/rooms/{room_id}/members")]
+pub async fn get_members(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    room_id: Path<String>,
+    req: Query<MembersRequest>,
+) -> Result<Json<MembersResponse>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    
+    match db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? {
+        Some(Membership::Join) => {},
+        Some(_) => return Err(Error::Unimplemented),
+        None => return Err(Error::Forbidden),
+    }
+
+    let mut state = db.get_full_state(&room_id).await?;
+    state.retain(|event| {
+        let membership: Membership = event.content.get("membership")
+            .expect("no membership in m.room.member")
+            .as_str()
+            .expect("membership is not a string")
+            .parse()
+            .unwrap();
+        event.ty == "m.room.member"
+        && if let Some(filter) = &req.membership { membership == *filter } else { true }
+        && if let Some(exclude) = &req.not_membership { membership != *exclude } else { true }
+    });
+
+    Ok(Json(MembersResponse { chunk: state }))
+}
+
+#[derive(Serialize)]
+pub struct SendEventResponse {
+    event_id: String,
+}
+
+#[put("/rooms/{room_id}/state/{event_type}/{state_key}")]
+pub async fn send_state_event(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    req: Path<(String, String, String)>,
+    event_content: Json<JsonValue>,
+) -> Result<Json<SendEventResponse>, Error> {
+    let (room_id, event_type, state_key) = req.into_inner();
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
+
+    if db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? != Some(Membership::Join) {
+        return Err(Error::Forbidden);
+    }
+
+    let (depth, prev_events) = match db.get_prev_event_ids(&room_id).await? {
+        Some(v) => v,
+        None => return Err(Error::NotFound),
+    };
+    let event = UnhashedPdu {
+        room_id,
+        sender: user_id,
+        origin: state.config.domain.clone(),
+        origin_server_ts: chrono::Utc::now().timestamp_millis(),
+        ty: event_type,
+        state_key: Some(state_key),
+        content: event_content.into_inner(),
+        prev_events,
+        depth,
+        auth_events: Vec::new(),    //TODO: permissions and whatnot
+        redacts: None,
+        unsigned: None,
+    }.finalize();
+
+    let mut event_id = event.hashes.sha256.clone();
+    event_id.insert(0, '$');
+
+    db.add_events(&[event]).await?;
+
+    Ok(Json(SendEventResponse {
+        event_id,
+    }))
+}
+
+#[put("/rooms/{room_id}/send/{event_type}/{txn_id}")]
+pub async fn send_event(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    req: Path<(String, String, String)>,
+    event_content: Json<JsonValue>,
+) -> Result<Json<SendEventResponse>, Error> {
+    let (room_id, event_type, state_key) = req.into_inner();
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
+
+    if db.get_membership(
+        &format!("@{}:{}", username, state.config.domain),
+        &room_id
+    ).await? != Some(Membership::Join) {
+        return Err(Error::Forbidden);
+    }
+
+    let (depth, prev_events) = match db.get_prev_event_ids(&room_id).await? {
+        Some(v) => v,
+        None => return Err(Error::NotFound),
+    };
+    let event = UnhashedPdu {
+        room_id,
+        sender: user_id,
+        origin: state.config.domain.clone(),
+        origin_server_ts: chrono::Utc::now().timestamp_millis(),
+        ty: event_type,
+        state_key: None,
+        content: event_content.into_inner(),
+        prev_events,
+        depth,
+        auth_events: Vec::new(),    //TODO: permissions and whatnot
+        redacts: None,
+        unsigned: None,
+    }.finalize();
+
+    let mut event_id = event.hashes.sha256.clone();
+    event_id.insert(0, '$');
+
+    db.add_events(&[event]).await?;
+
+    Ok(Json(SendEventResponse {
+        event_id,
     }))
 }
