@@ -1,4 +1,4 @@
-use actix_web::{post, web::{Data, Json}};
+use actix_web::{post, web::{Data, Json, Path}};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json, to_value};
 use std::{
@@ -303,4 +303,56 @@ pub async fn create_room(
     Ok(Json(json!({
         "room_id": room_id
     })))
+}
+
+#[derive(Deserialize)]
+pub struct InviteRequest {
+    user_id: String,
+}
+
+#[post("/rooms/{room_id}/invite")]
+pub async fn invite(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    room_id: Path<String>,
+    req: Json<InviteRequest>,
+) -> Result<Json<()>, Error> {
+    let mut db = state.db_pool.get_client().await?;
+    let username = db.try_auth(token.0).await?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
+
+    if db.get_membership(&user_id, &room_id).await? != Some(room::Membership::Join) {
+        return Err(Error::Forbidden);
+    }
+
+    let invitee = req.into_inner().user_id;
+    match db.get_membership(&invitee, &room_id).await? {
+        Some(room::Membership::Ban) | Some(room::Membership::Join) => return Err(Error::Forbidden),
+        //TODO: what happens if someone gets invited twice?
+        _ => {},
+    }
+    let (depth, prev_events) = db.get_prev_event_ids(&room_id).await?.ok_or(Error::NotFound)?;
+    let invite_event = UnhashedPdu {
+        room_id: room_id.clone(),
+        sender: user_id.clone(),
+        origin: state.config.domain.clone(),
+        origin_server_ts: chrono::Utc::now().timestamp_millis(),
+        ty: "m.room.member".to_string(),
+        state_key: Some(invitee),
+        content: to_value(&room::Member {
+            avatar_url: None,
+            displayname: None,
+            membership: room::Membership::Invite,
+            is_direct: false,
+        }).unwrap(),
+        prev_events,
+        depth: depth as i64,
+        auth_events: Vec::new(),
+        redacts: None,
+        unsigned: None,
+    }.finalize();
+
+    db.add_events(&[invite_event]).await?;
+
+    Ok(Json(()))
 }
