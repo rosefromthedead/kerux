@@ -161,8 +161,8 @@ pub async fn register(
     let req = req.into_inner();
     let query_string = http_req.query_string();
     match query_string.split('&').find(|s| s.starts_with("kind=")) {
-        Some("user") => {},
-        Some("guest") => return Err(Error::Unimplemented),
+        Some("kind=user") => {},
+        Some("kind=guest") => return Err(Error::Unimplemented),
         Some(x) => return Err(Error::InvalidParam(x.to_string())),
         None => return Err(Error::MissingParam("kind".to_string())),
     }
