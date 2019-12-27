@@ -190,7 +190,20 @@ pub async fn sync(
                     account_data,
                 });
             },
-            Membership::Invite => {},
+            Membership::Invite => {
+                let room_state = db.get_full_state(&room_id).await?;
+                let events = room_state.into_iter().map(|event| StrippedState {
+                    content: event.content,
+                    state_key: event.state_key.unwrap(),
+                    ty: event.ty,
+                    sender: event.sender,
+                }).collect();
+                invite.insert(room_id, InvitedRoom {
+                    invite_state: InviteState {
+                        events,
+                    },
+                });
+            },
             Membership::Leave => {},
             Membership::Knock => {},
             Membership::Ban => {},
