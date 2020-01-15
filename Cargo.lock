@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.19"
+version = "0.1.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "proc-macro2 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1168,6 +1168,7 @@ name = "matrix_server"
 version = "0.1.0"
 dependencies = [
  "actix-web 2.0.0-alpha.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2268,7 +2269,7 @@ name = "trust-dns-proto"
 version = "0.18.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "async-trait 0.1.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "enum-as-inner 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-preview 0.3.0-alpha.19 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2550,7 +2551,7 @@ dependencies = [
 "checksum arc-swap 0.4.4 (registry+https://github.com/rust-lang/crates.io-index)" = "d7b8a9123b8027467bce0099fe556c628a53c8d83df0507084c31e9ba2e39aff"
 "checksum arrayref 0.3.5 (registry+https://github.com/rust-lang/crates.io-index)" = "0d382e583f07208808f6b1249e60848879ba3543f57c32277bf52d69c2f0f0ee"
 "checksum arrayvec 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)" = "b8d73f9beda665eaa98ab9e4f7442bd4e7de6652587de55b2525e52e29c1b0ba"
-"checksum async-trait 0.1.19 (registry+https://github.com/rust-lang/crates.io-index)" = "3495c8ae99b96d8a84050dee9d7b9d6425f9bfe84c2e3f800c2c2859457f8590"
+"checksum async-trait 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "c8df72488e87761e772f14ae0c2480396810e51b2c2ade912f97f0f7e5b95e3c"
 "checksum atty 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)" = "1803c647a3ec87095e7ae7acfca019e98de5ec9a7d01343f611cf3152ed71a90"
 "checksum autocfg 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "1d49d90015b3c36167a20fe2810c5cd875ad504b39cff3d4eae7977e6b7c1cb2"
 "checksum awc 0.3.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)" = "9a1c1032ee31cfd56de99bf4d629db71cb623170dc28cc9e6d5e93c6e070991a"

@@ -24,7 +24,7 @@ pub struct JoinRules {
     pub join_rule: JoinRule,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JoinRule {
     Public,
@@ -74,16 +74,68 @@ pub struct Topic {
 /// m.room.power_levels
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PowerLevels {
-    ban: u32,
+    ban: Option<u32>,
+    invite: Option<u32>,
+    kick: Option<u32>,
+    redact: Option<u32>,
     events: HashMap<String, u32>,
-    events_default: u32,
-    invite: u32,
-    kick: u32,
-    redact: u32,
-    state_default: u32,
+    events_default: Option<u32>,
+    state_default: Option<u32>,
     users: HashMap<String, u32>,
-    users_default: u32,
+    users_default: Option<u32>,
     notifications: Notifications,
+}
+
+impl PowerLevels {
+    /// This function returns the effective power levels for when a room has no power levels event.
+    /// The values are the same as when there is an event but the values are unspecified
+    /// (i.e. `None`), with the exception that state_default is 0 and the creator of the room has
+    /// power level 100.
+    pub fn no_event_default_levels(room_creator: &str) -> Self {
+        let mut users = HashMap::new();
+        users.insert(room_creator, 100);
+        PowerLevels {
+            ban: Some(50),
+            invite: Some(50),
+            kick: Some(50),
+            redact: Some(50),
+            events: HashMap::new(),
+            events_default: Some(0),
+            state_default: Some(0),
+            users,
+            users_default: Some(0),
+            notifications: Notifications::default(),
+        }
+    }
+
+    pub fn ban(&self) -> u32 {
+        self.ban.unwrap_or(50)
+    }
+
+    pub fn invite(&self) -> u32 {
+        self.invite.unwrap_or(50)
+    }
+
+    pub fn kick(&self) -> u32 {
+        self.kick.unwrap_or(50)
+    }
+
+    pub fn redact(&self) -> u32 {
+        self.kick.unwrap_or(50)
+    }
+
+    pub fn get_user_level(&self, user_id: &str) -> u32 {
+        self.users.get(user_id).copied().unwrap_or(self.users_default.unwrap_or(0))
+    }
+
+    pub fn get_event_level(&self, event_type: &str, is_state_event: bool) -> u32 {
+        let default = if is_state_event {
+            self.state_default.unwrap_or(50)
+        } else {
+            self.events_default.unwrap_or(0)
+        };
+        self.events.get(event_type).copied().unwrap_or(default)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

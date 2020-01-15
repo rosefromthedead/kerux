@@ -168,8 +168,9 @@ impl ClientGuard {
         Ok(())
     }
 
-    pub async fn add_events(&mut self,
-        events: impl IntoIterator<Item = &PduV4>
+    pub async fn add_pdus(
+        &mut self,
+        pdus: impl IntoIterator<Item = &PduV4>
     ) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
@@ -178,7 +179,7 @@ impl ClientGuard {
                     signatures)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
         ").compat().await?;
-        for event in events {
+        for event in pdus {
             db.execute(&stmt, &[
                 &event.room_id,
                 &event.sender,

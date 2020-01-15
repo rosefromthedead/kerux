@@ -11,6 +11,7 @@ mod client;
 mod events;
 mod log;
 mod storage;
+mod util;
 
 #[derive(Deserialize)]
 pub struct Config {
