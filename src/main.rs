@@ -2,10 +2,7 @@ extern crate tokio_postgres as pg;
 
 use actix_web::{App, middleware::Logger, web::{self, JsonConfig}};
 use serde::Deserialize;
-use std::{
-    fmt::{Debug, Result as FmtResult, Formatter},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 mod client;
 mod events;
