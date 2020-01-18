@@ -24,12 +24,6 @@ pub struct ServerState {
     pub db_pool: storage::postgres::DbPool,
 }
 
-impl Debug for ServerState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "ServerState {{ ... }}")
-    }
-}
-
 fn main() {
     run().map_err(|e| {
         eprintln!("{:?}", e);
