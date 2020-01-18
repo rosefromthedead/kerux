@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use crossbeam::queue::ArrayQueue;
 use futures::{
     compat::{Future01CompatExt, Stream01CompatExt},
@@ -14,6 +15,7 @@ use std::{
 use crate::{
     client::error::Error,
     events::{room::Membership, PduV4, Event},
+    storage::UserProfile,
 };
 
 pub struct DbPool {
@@ -34,7 +36,14 @@ impl DbPool {
         }
     }
 
-    pub async fn get_client(&self) -> Result<ClientGuard, pg::Error> {
+}
+
+#[async_trait]
+impl super::StorageManager for DbPool {
+    type Handle = ClientGuard;
+    type Error = pg::Error;
+
+    async fn get_handle(&self) -> Result<ClientGuard, pg::Error> {
         if let Ok(client) = self.queue.pop() {
             return Ok(ClientGuard {
                 queue: Arc::clone(&self.queue),
@@ -80,16 +89,19 @@ impl Drop for ClientGuard {
     }
 }
 
-// Eventually this will become a trait to allow more storage backends
-impl ClientGuard {
-    pub async fn create_user(&mut self, username: &str, password_hash: Option<&str>) -> Result<(), DbError> {
+#[async_trait]
+impl super::Storage for ClientGuard {
+    type Error = pg::Error;
+    type AccessToken = uuid::Uuid;
+
+    async fn create_user(&mut self, username: &str, password_hash: Option<&str>) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("INSERT INTO users(id, password_hash) VALUES ($1, $2);").compat().await?;
         db.execute(&stmt, &[&username, &password_hash]).compat().await?;
         Ok(())
     }
 
-    pub async fn verify_password(&mut self, username: &str, password: &str) -> Result<bool, DbError> {
+    async fn verify_password(&mut self, username: &str, password: &str) -> Result<bool, DbError> {
         let db = self.inner.as_mut().unwrap();
         let get_user = db.prepare("SELECT password_hash FROM users WHERE id=$1;").compat().await?;
         let mut rows = db.query(&get_user, &[&username]).compat(); 
@@ -104,7 +116,7 @@ impl ClientGuard {
         }
     }
 
-    pub async fn create_access_token(&mut self, username: &str, device_id: &str) -> Result<uuid::Uuid, DbError> {
+    async fn create_access_token(&mut self, username: &str, device_id: &str) -> Result<uuid::Uuid, DbError> {
         let db = self.inner.as_mut().unwrap();
         let access_token = uuid::Uuid::new_v4();
         let insert_token = db.prepare("INSERT INTO access_tokens(token, username, device_id) VALUES ($1, $2, $3);").compat().await?;
@@ -112,14 +124,14 @@ impl ClientGuard {
         Ok(access_token)
     }
 
-    pub async fn delete_access_token(&mut self, token: uuid::Uuid) -> Result<(), DbError> {
+    async fn delete_access_token(&mut self, token: uuid::Uuid) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("DELETE FROM access_tokens WHERE token = $1;").compat().await?;
         db.execute(&stmt, &[&token]).compat().await?;
         Ok(())
     }
 
-    pub async fn delete_all_access_tokens(&mut self, token: uuid::Uuid) -> Result<(), DbError> {
+    async fn delete_all_access_tokens(&mut self, token: uuid::Uuid) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
             WITH name AS (
@@ -131,46 +143,50 @@ impl ClientGuard {
         Ok(())
     }
 
-    pub async fn try_auth(&mut self, token: uuid::Uuid) -> Result<String, Error> {
+    async fn try_auth(&mut self, token: uuid::Uuid) -> Result<Option<String>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("SELECT username FROM access_tokens WHERE token = $1;").compat().await?;
         let mut rows = db.query(&query, &[&token]).compat();
-        let row = rows.next().await.ok_or(Error::UnknownToken)??;
-        let id = row.get("username");
+        let row = rows.next().await;
+        let id = match row {
+            Some(r) => r?.get("username"),
+            None => None,
+        };
         Ok(id)
     }
 
-    /// Returns the given user's avatar URL and display name, if present
-    pub async fn get_profile(&mut self, username: &str) -> Result<(Option<String>, Option<String>), Error> {
+    async fn get_profile(&mut self, username: &str) -> Result<Option<UserProfile>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("SELECT avatar_url, display_name FROM users WHERE id = $1;").compat().await?;
         let mut rows = db.query(&query, &[&username]).compat();
         let row = match rows.next().await {
             Some(v) => v?,
-            None => return Err(Error::NotFound),
+            None => return Ok(None),
         };
-        let avatar_url: Option<String> = row.try_get("avatar_url")?;
-        let display_name: Option<String> = row.try_get("display_name")?;
-        Ok((avatar_url, display_name))
+        let profile = UserProfile {
+            avatar_url: row.try_get("avatar_url")?,
+            displayname: row.try_get("display_name")?,
+        };
+        Ok(Some(profile))
     }
 
-    pub async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), DbError> {
+    async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("UPDATE users SET avatar_url = $1 WHERE id = $2;").compat().await?;
         db.execute(&stmt, &[&avatar_url, &username]).compat().await?;
         Ok(())
     }
 
-    pub async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), DbError> {
+    async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("UPDATE users SET display_name = $1 WHERE id = $2;").compat().await?;
         db.execute(&stmt, &[&display_name, &username]).compat().await?;
         Ok(())
     }
 
-    pub async fn add_pdus(
+    async fn add_pdus(
         &mut self,
-        pdus: impl IntoIterator<Item = &PduV4>
+        pdus: impl IntoIterator<Item = &PduV4> + Send,
     ) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
         let stmt = db.prepare("
@@ -201,7 +217,7 @@ impl ClientGuard {
         Ok(())
     }
 
-    pub async fn get_memberships_by_user(&mut self, user_id: &str)
+    async fn get_memberships_by_user(&mut self, user_id: &str)
             -> Result<Vec<(String, Membership)>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
@@ -217,7 +233,7 @@ impl ClientGuard {
             .try_collect::<Vec<(_, _)>>().await
     }
 
-    pub async fn get_membership(&mut self, user_id: &str, room_id: &str) 
+    async fn get_membership(&mut self, user_id: &str, room_id: &str) 
             -> Result<Option<Membership>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
@@ -237,7 +253,7 @@ impl ClientGuard {
         }
     }
 
-    pub async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), DbError> {
+    async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
             SELECT membership, COUNT(membership) FROM room_memberships
@@ -259,11 +275,11 @@ impl ClientGuard {
         Ok((joined_member_count, invited_member_count))
     }
 
-    pub async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, DbError> {
+    async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
             SELECT DISTINCT ON (type, state_key)
-                content, type, hash, sender, origin_server_ts, unsigned, state_key
+                sender, type, state_key, content, unsigned, redacts, hash, origin_server_ts
                 FROM room_events
                 WHERE room_id = $1 AND state_key != NULL
                 ORDER BY type, state_key, depth DESC;
@@ -273,25 +289,26 @@ impl ClientGuard {
         while let Some(row) = rows.next().await {
             let row = row?;
             ret.push(Event {
-                content: row.get("content"),
-                ty: row.get("type"),
-                event_id: row.get("hash"),
                 room_id: None,
                 sender: row.get("sender"),
-                origin_server_ts: row.get("origin_server_ts"),
-                unsigned: row.get("unsigned"),
+                ty: row.get("type"),
                 state_key: row.get("state_key"),
+                content: row.get("content"),
+                unsigned: row.get("unsigned"),
+                redacts: row.get("redacts"),
+                event_id: row.get("hash"),
+                origin_server_ts: row.get("origin_server_ts"),
             });
         }
         Ok(ret)
     }
 
-    pub async fn get_state_event(&mut self, room_id: &str, event_type: &str, state_key: &str)
+    async fn get_state_event(&mut self, room_id: &str, event_type: &str, state_key: &str)
             -> Result<Option<Event>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
             SELECT DISTINCT ON (state_key)
-                content, type, hash, sender, origin_server_ts, unsigned, state_key
+                sender, type, state_key, content, unsigned, redacts, hash, origin_server_ts
                 FROM room_events
                 WHERE room_id = $1 AND type = $2 AND state_key = $3
                 ORDER BY state_key, depth DESC;
@@ -300,29 +317,28 @@ impl ClientGuard {
         if let Some(row) = rows.next().await {
             let row = row?;
             Ok(Some(Event {
-                content: row.get("content"),
-                ty: row.get("type"),
-                event_id: row.get("hash"),
                 room_id: None,
                 sender: row.get("sender"),
-                origin_server_ts: row.get("origin_server_ts"),
-                unsigned: row.get("unsigned"),
+                ty: row.get("type"),
                 state_key: row.get("state_key"),
+                content: row.get("content"),
+                unsigned: row.get("unsigned"),
+                redacts: row.get("redacts"),
+                event_id: row.get("hash"),
+                origin_server_ts: row.get("origin_server_ts"),
             }))
         } else {
             Ok(None)
         }
     }
 
-    pub async fn get_events_since(&mut self, room_id: &str, since: Option<&str>)
-            -> Result<Vec<Event>, Error> {
+    async fn get_events_since(&mut self, room_id: &str, since: u64)
+            -> Result<Vec<Event>, DbError> {
         let db = self.inner.as_mut().unwrap();
-        let since: i64 = since.map(str::parse)
-            .unwrap_or(Ok(0))
-            .map_err(|_| Error::InvalidParam(String::from("invalid since param")))?;
+        let since: i64 = since as i64;
         let query = db.prepare("
             SELECT
-                content, type, hash, sender, origin_server_ts, unsigned, state_key
+                sender, type, state_key, content, unsigned, redacts, hash, origin_server_ts
                 FROM room_events
                 WHERE room_id = $1 AND ordering > $2;
         ").compat().await?;
@@ -331,25 +347,26 @@ impl ClientGuard {
         while let Some(row) = rows.next().await {
             let row = row?;
             ret.push(Event {
-                content: row.get("content"),
-                ty: row.get("type"),
-                event_id: row.get("hash"),
                 room_id: None,
                 sender: row.get("sender"),
-                origin_server_ts: row.get("origin_server_ts"),
-                unsigned: row.get("unsigned"),
+                ty: row.get("type"),
                 state_key: row.get("state_key"),
+                content: row.get("content"),
+                unsigned: row.get("unsigned"),
+                redacts: row.get("redacts"),
+                event_id: row.get("hash"),
+                origin_server_ts: row.get("origin_server_ts"),
             });
         }
         Ok(ret)
     }
 
-    pub async fn get_event(&mut self, room_id: &str, event_id: &str)
+    async fn get_event(&mut self, room_id: &str, event_id: &str)
             -> Result<Option<Event>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
             SELECT
-                content, type, hash, room_id, sender, origin_server_ts, unsigned, state_key
+                sender, type, state_key, content, unsigned, redacts, hash, origin_server_ts
                 FROM room_events
                 WHERE room_id = $1 AND event_id = $2;
         ").compat().await?;
@@ -357,21 +374,22 @@ impl ClientGuard {
         if let Some(row) = rows.next().await {
             let row = row?;
             Ok(Some(Event {
-                content: row.get("content"),
-                ty: row.get("type"),
-                event_id: row.get("hash"),
-                room_id: Some(row.get("room_id")),
+                room_id: None,
                 sender: row.get("sender"),
-                origin_server_ts: row.get("origin_server_ts"),
-                unsigned: row.get("unsigned"),
+                ty: row.get("type"),
                 state_key: row.get("state_key"),
+                content: row.get("content"),
+                unsigned: row.get("unsigned"),
+                redacts: row.get("redacts"),
+                event_id: row.get("hash"),
+                origin_server_ts: row.get("origin_server_ts"),
             }))
         } else {
             Ok(None)
         }
     }
 
-    pub async fn get_prev_event_ids(&mut self, room_id: &str)
+    async fn get_prev_event_ids(&mut self, room_id: &str)
             -> Result<Option<(i64, Vec<String>)>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
@@ -393,7 +411,7 @@ impl ClientGuard {
         }
     }
 
-    pub async fn get_user_account_data(&mut self, username: &str)
+    async fn get_user_account_data(&mut self, username: &str)
             -> Result<HashMap<String, JsonValue>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("

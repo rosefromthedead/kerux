@@ -7,12 +7,13 @@ use actix_web::{
 };
 use displaydoc::Display;
 use serde_json::{Error as JsonError, json};
-
 use std::{
     io::Error as IoError,
     str::Utf8Error,
     string::FromUtf8Error,
 };
+
+use crate::util::AddEventError;
 
 //TODO: should we expose any variant fields in display impl?
 #[derive(Debug, Display)]
@@ -49,6 +50,8 @@ pub enum Error {
     PasswordError(argon2::Error),
     /// The requested feature is unimplemented.
     Unimplemented,
+    /// An invalid event was sent to a room.
+    AddEventError(AddEventError<pg::Error>),
     /// An unknown error occurred.
     Unknown(String),
 }
@@ -129,10 +132,14 @@ impl ResponseError for Error {
                 ("M_UNKNOWN",
                 "Feature unimplemented".to_string())
             },
+            AddEventError(error) => {
+                ("M_UNKNOWN",
+                format!("{}", error))
+            },
             Unknown(e) => {
                 ("M_UNKNOWN",
                 e.clone())
-            }
+            },
         };
         HttpResponseBuilder::new(self.status_code())
             .json(json!({
@@ -189,6 +196,15 @@ impl From<pg::Error> for Error {
 impl From<argon2::Error> for Error {
     fn from(e: argon2::Error) -> Self {
         Error::PasswordError(e)
+    }
+}
+
+impl From<AddEventError<pg::Error>> for Error {
+    fn from(e: AddEventError<pg::Error>) -> Self {
+        match e {
+            AddEventError::DbError(e) => Error::DbError(e),
+            _ => Error::AddEventError(e),
+        }
     }
 }
 

@@ -12,9 +12,11 @@ use crate::{
         error::Error,
     },
     events::{
-        Event, UnhashedPdu,
+        Event,
         room::Membership,
     },
+    storage::{Storage, StorageManager},
+    util::StorageExt,
     ServerState,
 };
 
@@ -147,8 +149,8 @@ pub async fn sync(
     token: AccessToken,
     req: Query<SyncRequest>,
 ) -> Result<Json<SyncResponse>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
     let memberships = db.get_memberships_by_user(&user_id).await?;
@@ -237,8 +239,8 @@ pub async fn get_event(
     path_args: Path<(String, String)>,
 ) -> Result<Json<Event>, Error> {
     let (room_id, event_id) = path_args.into_inner();
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
 
     if db.get_membership(
         &format!("@{}:{}", username, state.config.domain),
@@ -277,8 +279,8 @@ pub async fn get_state_event_inner(
     token: AccessToken,
     (room_id, event_type, state_key): (String, String, String),
 ) -> Result<Json<Event>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
 
     if db.get_membership(
         &format!("@{}:{}", username, state.config.domain),
@@ -300,8 +302,8 @@ pub async fn get_state(
     room_id: Path<String>,
 ) -> Result<Json<Vec<Event>>, Error> {
     let room_id = room_id.into_inner();
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
 
     match db.get_membership(
         &format!("@{}:{}", username, state.config.domain),
@@ -337,8 +339,8 @@ pub async fn get_members(
     room_id: Path<String>,
     req: Query<MembersRequest>,
 ) -> Result<Json<MembersResponse>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     
     match db.get_membership(
         &format!("@{}:{}", username, state.config.domain),
@@ -378,12 +380,12 @@ pub async fn send_state_event(
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
     let (room_id, event_type, state_key) = req.into_inner();
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
     if db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
         return Err(Error::Forbidden);
@@ -393,25 +395,19 @@ pub async fn send_state_event(
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
-    let event = UnhashedPdu {
-        room_id,
+    let event = Event {
+        room_id: None,
         sender: user_id,
-        origin: state.config.domain.clone(),
-        origin_server_ts: chrono::Utc::now().timestamp_millis(),
         ty: event_type,
         state_key: Some(state_key),
         content: event_content.into_inner(),
-        prev_events,
-        depth,
-        auth_events: Vec::new(),    //TODO: permissions and whatnot
         redacts: None,
         unsigned: None,
-    }.finalize();
+        event_id: None,
+        origin_server_ts: None,
+    };
 
-    let mut event_id = event.hashes.sha256.clone();
-    event_id.insert(0, '$');
-
-    db.add_events(&[event]).await?;
+    let event_id = db.add_event(&event, &room_id).await?;
 
     Ok(Json(SendEventResponse {
         event_id,
@@ -426,12 +422,12 @@ pub async fn send_event(
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
     let (room_id, event_type, state_key) = req.into_inner();
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
     if db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
         return Err(Error::Forbidden);
@@ -441,25 +437,19 @@ pub async fn send_event(
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
-    let event = UnhashedPdu {
-        room_id,
+    let event = Event {
+        room_id: None,
         sender: user_id,
-        origin: state.config.domain.clone(),
-        origin_server_ts: chrono::Utc::now().timestamp_millis(),
         ty: event_type,
         state_key: None,
         content: event_content.into_inner(),
-        prev_events,
-        depth,
-        auth_events: Vec::new(),    //TODO: permissions and whatnot
-        redacts: None,
         unsigned: None,
-    }.finalize();
+        redacts: None,
+        event_id: None,
+        origin_server_ts: None,
+    };
 
-    let mut event_id = event.hashes.sha256.clone();
-    event_id.insert(0, '$');
-
-    db.add_events(&[event]).await?;
+    let event_id = db.add_event(&event, &room_id).await?;
 
     Ok(Json(SendEventResponse {
         event_id,
