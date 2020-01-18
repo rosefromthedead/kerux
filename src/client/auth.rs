@@ -8,7 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{client::error::Error, ServerState};
+use crate::{client::error::Error, storage::{Storage, StorageManager}, ServerState};
 
 #[derive(Debug, Deserialize)]
 enum LoginType {
@@ -108,7 +108,7 @@ pub async fn login(
     };
     let password = req.password.ok_or(Error::Unimplemented)?;
     
-    let mut db = state.db_pool.get_client().await?;
+    let mut db = state.db_pool.get_handle().await?;
     if !db.verify_password(&username, &password).await? {
         return Err(Error::Forbidden);
     }
@@ -128,14 +128,14 @@ pub async fn login(
 
 #[post("/logout")]
 pub async fn logout(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_client().await?;
+    let mut db = state.db_pool.get_handle().await?;
     db.delete_access_token(token.0).await?;
     Ok(Json(()))
 }
 
 #[post("/logout/all")]
 pub async fn logout_all(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_client().await?;
+    let mut db = state.db_pool.get_handle().await?;
     db.delete_all_access_tokens(token.0).await?;    
     Ok(Json(()))
 }
@@ -170,7 +170,7 @@ pub async fn register(
     let salt: [u8; 16] = rand::random();
     let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
 
-    let mut db = state.db_pool.get_client().await?;
+    let mut db = state.db_pool.get_handle().await?;
     db.create_user(&req.username, Some(&password_hash)).await?;
     if req.inhibit_login {
         return Ok(Json(json!({

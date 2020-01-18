@@ -10,6 +10,7 @@ use crate::{
         auth::AccessToken,
         error::Error,
     },
+    storage::{Storage, StorageManager, UserProfile},
     ServerState,
 };
 
@@ -28,8 +29,8 @@ pub async fn get_avatar_url(
         return Err(Error::Unimplemented);
     }
 
-    let mut db = state.db_pool.get_client().await?;
-    let avatar_url = match db.get_profile(username).await?.0 {
+    let mut db = state.db_pool.get_handle().await?;
+    let avatar_url = match db.get_profile(username).await?.unwrap().avatar_url {
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
@@ -46,8 +47,8 @@ pub async fn set_avatar_url(
     req_id: Path<String>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let user_id = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let user_id = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     if *req_id != user_id {
         return Err(Error::Forbidden);
     }
@@ -84,14 +85,14 @@ pub async fn get_display_name(
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
-    let mut db = state.db_pool.get_client().await?;
-    let display_name = match db.get_profile(username).await?.1 {
+    let mut db = state.db_pool.get_handle().await?;
+    let displayname = match db.get_profile(username).await?.unwrap().displayname {
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
 
     Ok(Json(json!({
-        "displayname": display_name
+        "displayname": displayname
     })))
 }
 
@@ -102,8 +103,8 @@ pub async fn set_display_name(
     req_id: Path<String>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let user_id = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let user_id = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     if *req_id != user_id {
         return Err(Error::Forbidden);
     }
@@ -140,14 +141,14 @@ pub async fn get_profile(
         return Err(Error::Unimplemented);
     }
 
-    let mut db = state.db_pool.get_client().await?;
-    let (avatar_url, display_name) = db.get_profile(&username).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
     let mut response = serde_json::Map::new();
     if let Some(v) = avatar_url {
         response.insert("avatar_url".into(), v.into());
     }
-    if let Some(v) = display_name {
-        response.insert("display_name".into(), v.into());
+    if let Some(v) = displayname {
+        response.insert("displayname".into(), v.into());
     }
 
     Ok(Json(response.into()))

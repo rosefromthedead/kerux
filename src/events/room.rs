@@ -93,7 +93,7 @@ impl PowerLevels {
     /// power level 100.
     pub fn no_event_default_levels(room_creator: &str) -> Self {
         let mut users = HashMap::new();
-        users.insert(room_creator, 100);
+        users.insert(room_creator.to_string(), 100);
         PowerLevels {
             ban: Some(50),
             invite: Some(50),
@@ -146,15 +146,15 @@ pub struct Notifications {
 impl Default for PowerLevels {
     fn default() -> Self {
         PowerLevels {
-            ban: 50,
+            ban: Some(50),
             events: HashMap::new(),
-            events_default: 0,
-            invite: 50,
-            kick: 50,
-            redact: 50,
-            state_default: 50,
+            events_default: Some(0),
+            invite: Some(50),
+            kick: Some(50),
+            redact: Some(50),
+            state_default: Some(50),
             users: HashMap::new(),
-            users_default: 50,
+            users_default: Some(50),
             notifications: Notifications::default(),
         }
     }

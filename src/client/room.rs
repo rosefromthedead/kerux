@@ -12,8 +12,10 @@ use crate::{
         error::Error,
     },
     events::{
-        room, UnhashedPdu,
+        room, Event, UnhashedPdu,
     },
+    storage::{Storage, StorageManager, UserProfile},
+    util::StorageExt,
     ServerState,
 };
 
@@ -71,8 +73,8 @@ pub async fn create_room(
     req: Json<CreateRoomRequest>,
 ) -> Result<Json<JsonValue>, Error> {
     let req = req.into_inner();
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
     let room_version = req.room_version.unwrap_or("4".to_string());
@@ -113,7 +115,7 @@ pub async fn create_room(
     }.finalize();
     
     let creator_join = {
-        let (avatar_url, displayname) = db.get_profile(&username).await?;
+        let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
         to_value(&room::Member {
             avatar_url,
             displayname,
@@ -298,7 +300,7 @@ pub async fn create_room(
         );
     }
 
-    db.add_events(&events).await?;
+    db.add_pdus(&events).await?;
 
     Ok(Json(json!({
         "room_id": room_id
@@ -317,26 +319,14 @@ pub async fn invite(
     room_id: Path<String>,
     req: Json<InviteRequest>,
 ) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_client().await?;
-    let username = db.try_auth(token.0).await?;
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
-
-    if db.get_membership(&user_id, &room_id).await? != Some(room::Membership::Join) {
-        return Err(Error::Forbidden);
-    }
-
     let invitee = req.into_inner().user_id;
-    match db.get_membership(&invitee, &room_id).await? {
-        Some(room::Membership::Ban) | Some(room::Membership::Join) => return Err(Error::Forbidden),
-        //TODO: what happens if someone gets invited twice?
-        _ => {},
-    }
-    let (depth, prev_events) = db.get_prev_event_ids(&room_id).await?.ok_or(Error::NotFound)?;
-    let invite_event = UnhashedPdu {
-        room_id: room_id.clone(),
+
+    let invite_event = Event {
+        room_id: None,
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: chrono::Utc::now().timestamp_millis(),
         ty: "m.room.member".to_string(),
         state_key: Some(invitee),
         content: to_value(&room::Member {
@@ -345,14 +335,13 @@ pub async fn invite(
             membership: room::Membership::Invite,
             is_direct: false,
         }).unwrap(),
-        prev_events,
-        depth: depth as i64,
-        auth_events: Vec::new(),
-        redacts: None,
         unsigned: None,
-    }.finalize();
+        redacts: None,
+        event_id: None,
+        origin_server_ts: None,
+    };
 
-    db.add_events(&[invite_event]).await?;
+    db.add_event(&invite_event, &room_id).await?;
 
     Ok(Json(()))
 }
