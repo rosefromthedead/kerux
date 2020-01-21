@@ -341,7 +341,7 @@ pub async fn invite(
         origin_server_ts: None,
     };
 
-    db.add_event(&invite_event, &room_id).await?;
+    db.add_event(invite_event, &room_id).await?;
 
     Ok(Json(()))
 }

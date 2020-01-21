@@ -65,7 +65,7 @@ pub trait Storage: Send {
         display_name: &str,
     ) -> Result<(), Self::Error>;
 
-    async fn add_pdus(&mut self, pdus: impl IntoIterator<Item = &PduV4> + Send)
+    async fn add_pdus(&mut self, pdus: &[PduV4])
         -> Result<(), Self::Error>;
 
     async fn get_memberships_by_user(
@@ -93,7 +93,7 @@ pub trait Storage: Send {
     async fn get_events_since(
         &mut self,
         room_id: &str,
-        since: Option<&str>,
+        since: u64,
     ) -> Result<Vec<Event>, Self::Error>;
 
     async fn get_event(

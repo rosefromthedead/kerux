@@ -13,6 +13,8 @@ pub enum AddEventError<E> {
     UserNotInRoom,
     /// A user tried to join a room from which they are banned.
     UserBanned,
+    /// A user tried to join a private room to which they were not invited.
+    UserNotInvited,
     /// A user tried to send an event to a room which does not exist.
     RoomNotFound,
     /// The latest `m.room.power_levels` event in this room is invalid.
@@ -40,7 +42,7 @@ impl<E> From<E> for AddEventError<E> {
 pub trait StorageExt<E> {
     async fn add_event(
         &mut self,
-        event: &Event,
+        event: Event,
         room_id: &str,
     ) -> Result<String, AddEventError<E>>;
 }
@@ -49,7 +51,7 @@ pub trait StorageExt<E> {
 impl<T: Storage<Error = E>, E: Error + Send + 'static> StorageExt<E> for T {
     async fn add_event(
         &mut self,
-        event: &Event,
+        event: Event,
         room_id: &str,
     ) -> Result<String, AddEventError<E>> {
         let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
@@ -95,7 +97,7 @@ impl<T: Storage<Error = E>, E: Error + Send + 'static> StorageExt<E> for T {
         };
         let pdu = UnhashedPdu {
             room_id: room_id.to_string(),
-            sender: event.sender,
+            sender: event.sender.clone(),
             ty: event.ty,
             state_key: event.state_key,
             content: event.content,
@@ -121,11 +123,11 @@ async fn validate_member_event<S: Storage<Error = E>, E: Error>(
     power_levels: &room::PowerLevels,
 ) -> Result<(), AddEventError<E>> {
     let sender_membership = db.get_membership(&event.sender, room_id).await?;
-    let affected_user = event.state_key.ok_or_else(
+    let affected_user = event.state_key.clone().ok_or_else(
         || AddEventError::InvalidEvent(format!("no state key in m.room.member event"))
     )?;
     let prev_membership = db.get_membership(&affected_user, room_id).await?;
-    let new_member_content: room::Member = serde_json::from_value(event.content)
+    let new_member_content: room::Member = serde_json::from_value(event.content.clone())
         .map_err(|e| AddEventError::InvalidEvent(format!("{}", e)))?;
     let new_membership = new_member_content.membership;
     use room::Membership::*;
@@ -149,6 +151,9 @@ async fn validate_member_event<S: Storage<Error = E>, E: Error>(
                         },
                         None => false,
                     };
+                    if !is_public {
+                        return Err(AddEventError::UserNotInvited);
+                    }
                 },
             }
         },
@@ -156,7 +161,7 @@ async fn validate_member_event<S: Storage<Error = E>, E: Error>(
             if sender_membership != Some(room::Membership::Join) {
                 return Err(AddEventError::UserNotInRoom);
             }
-            if event.state_key != Some(event.sender) {
+            if event.state_key.as_ref() != Some(&event.sender) {
                 // users can set own membership to leave, but setting others'
                 // to leave is kicking and you need permission for that
                 let user_level = power_levels.get_user_level(&event.sender);
@@ -171,7 +176,7 @@ async fn validate_member_event<S: Storage<Error = E>, E: Error>(
                 return Err(AddEventError::UserNotInRoom);
             }
             let user_level = power_levels.get_user_level(&event.sender);
-            let ban_level = power_levels.kick();
+            let ban_level = power_levels.ban();
             if user_level < ban_level {
                 return Err(AddEventError::InsufficientPowerLevel);
             }

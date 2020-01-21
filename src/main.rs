@@ -43,7 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .service(web::scope("/_matrix/client").configure(client::cs_api))
     })
     .bind(&server_state2.config.bind_address)?
-    .run()?;
+    .run();
 
     Ok(())
 }
