@@ -172,8 +172,11 @@ pub async fn sync(
                 } else {
                     State { events: Vec::new() }
                 };
+                //TODO: what happens if since == none
+                let since_param = req.since.as_deref().map(str::parse).unwrap_or(Ok(0))
+                    .map_err(|e| Error::InvalidParam(format!("invalid since param: {}", e)))?;
                 let timeline = Timeline {
-                    events: db.get_events_since(&room_id, req.since.as_ref().map(|s| &**s)).await?,
+                    events: db.get_events_since(&room_id, since_param).await?,
                     limited: false,
                     prev_batch: String::from("placeholder_prev_batch"),
                 };
@@ -391,10 +394,6 @@ pub async fn send_state_event(
         return Err(Error::Forbidden);
     }
 
-    let (depth, prev_events) = match db.get_prev_event_ids(&room_id).await? {
-        Some(v) => v,
-        None => return Err(Error::NotFound),
-    };
     let event = Event {
         room_id: None,
         sender: user_id,
@@ -407,7 +406,7 @@ pub async fn send_state_event(
         origin_server_ts: None,
     };
 
-    let event_id = db.add_event(&event, &room_id).await?;
+    let event_id = db.add_event(event, &room_id).await?;
 
     Ok(Json(SendEventResponse {
         event_id,
@@ -421,7 +420,7 @@ pub async fn send_event(
     req: Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let (room_id, event_type, state_key) = req.into_inner();
+    let (room_id, event_type, _txn_id) = req.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
@@ -433,10 +432,6 @@ pub async fn send_event(
         return Err(Error::Forbidden);
     }
 
-    let (depth, prev_events) = match db.get_prev_event_ids(&room_id).await? {
-        Some(v) => v,
-        None => return Err(Error::NotFound),
-    };
     let event = Event {
         room_id: None,
         sender: user_id,
@@ -449,7 +444,7 @@ pub async fn send_event(
         origin_server_ts: None,
     };
 
-    let event_id = db.add_event(&event, &room_id).await?;
+    let event_id = db.add_event(event, &room_id).await?;
 
     Ok(Json(SendEventResponse {
         event_id,

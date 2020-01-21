@@ -65,7 +65,7 @@ impl ResponseError for Error {
             BadJson(_) | NotJson(_) | MissingParam(_) | InvalidParam(_) | UnsupportedRoomVersion
                 | UrlNotUtf8(_) | PasswordError(_) | Unknown(_) => StatusCode::BAD_REQUEST,
             LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
-            DbError(_) | IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            DbError(_) | IoError(_) | AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Unimplemented => StatusCode::NOT_IMPLEMENTED,
         }
     }
