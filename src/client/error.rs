@@ -13,7 +13,7 @@ use std::{
     string::FromUtf8Error,
 };
 
-use crate::{storage::StorageManager, util::AddEventError};
+use crate::{storage::StorageManager, util::storage::AddEventError};
 
 type DbError = <crate::StorageManager as StorageManager>::Error;
 
