@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use crate::events::{room::Membership, Event, PduV4};
 
+pub mod mem;
 pub mod postgres;
 
+#[derive(Clone, Debug, Default)]
 pub struct UserProfile {
     pub avatar_url: Option<String>,
     pub displayname: Option<String>,
@@ -22,7 +25,6 @@ pub trait StorageManager {
 #[async_trait]
 pub trait Storage: Send {
     type Error: std::error::Error;
-    type AccessToken: Copy;
 
     async fn create_user(
         &mut self,
@@ -40,18 +42,18 @@ pub trait Storage: Send {
         &mut self,
         username: &str,
         device_id: &str,
-    ) -> Result<Self::AccessToken, Self::Error>;
+    ) -> Result<Uuid, Self::Error>;
 
-    async fn delete_access_token(&mut self, token: Self::AccessToken) -> Result<(), Self::Error>;
+    async fn delete_access_token(&mut self, token: Uuid) -> Result<(), Self::Error>;
 
     /// Deletes all access tokens associated with the same user as this one
     async fn delete_all_access_tokens(
         &mut self,
-        token: Self::AccessToken,
+        token: Uuid,
     ) -> Result<(), Self::Error>;
 
     /// Returns the username for which this token is valid, if any
-    async fn try_auth(&mut self, token: uuid::Uuid) -> Result<Option<String>, Self::Error>;
+    async fn try_auth(&mut self, token: Uuid) -> Result<Option<String>, Self::Error>;
 
     /// Returns the given user's avatar URL and display name, if present
     async fn get_profile(&mut self, username: &str) -> Result<Option<UserProfile>, Self::Error>;
@@ -65,13 +67,12 @@ pub trait Storage: Send {
         display_name: &str,
     ) -> Result<(), Self::Error>;
 
-    async fn add_pdus(&mut self, pdus: &[PduV4])
-        -> Result<(), Self::Error>;
+    async fn add_pdus(&mut self, pdus: &[PduV4]) -> Result<(), Self::Error>;
 
     async fn get_memberships_by_user(
         &mut self,
         user_id: &str,
-    ) -> Result<Vec<(String, Membership)>, Self::Error>;
+    ) -> Result<HashMap<String, Membership>, Self::Error>;
 
     async fn get_membership(
         &mut self,
@@ -79,6 +80,9 @@ pub trait Storage: Send {
         room_id: &str,
     ) -> Result<Option<Membership>, Self::Error>;
 
+    /// Returns the number of users in a room and the number of users invited to the room.
+    /// 
+    /// Returns (0, 0) if the room does not exist.
     async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), Self::Error>;
 
     async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, Self::Error>;
@@ -111,4 +115,8 @@ pub trait Storage: Send {
         &mut self,
         username: &str,
     ) -> Result<HashMap<String, JsonValue>, Self::Error>;
+
+    async fn print_the_world(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }

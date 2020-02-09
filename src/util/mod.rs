@@ -1,14 +1,22 @@
+use actix_web::{post, web::{Data, Json}};
 use async_trait::async_trait;
 use displaydoc::Display;
-use std::error::Error;
+use serde_json::Value as JsonValue;
+use std::{
+    error::Error,
+    sync::Arc,
+};
 
 use crate::{
     events::{Event, UnhashedPdu, room},
-    storage::Storage,
+    storage::{Storage, StorageManager},
+    ServerState,
 };
 
+type DbError = <crate::StorageManager as StorageManager>::Error;
+
 #[derive(Debug, Display)]
-pub enum AddEventError<E> {
+pub enum AddEventError {
     /// A user tried to send an event to a room which they are not in.
     UserNotInRoom,
     /// A user tried to join a room from which they are banned.
@@ -29,31 +37,33 @@ pub enum AddEventError<E> {
     InvalidEvent(String),
 
     /// A database error occurred.
-    DbError(E),
+    DbError(DbError),
 }
 
-impl<E> From<E> for AddEventError<E> {
-    fn from(e: E) -> Self {
+impl From<DbError> for AddEventError {
+    fn from(e: DbError) -> Self {
         AddEventError::DbError(e)
     }
 }
 
 #[async_trait]
-pub trait StorageExt<E> {
+pub trait StorageExt {
     async fn add_event(
         &mut self,
         event: Event,
         room_id: &str,
-    ) -> Result<String, AddEventError<E>>;
+    ) -> Result<String, AddEventError>;
+
+    async fn create_test_users(&mut self) -> Result<(), DbError>;
 }
 
 #[async_trait]
-impl<T: Storage<Error = E>, E: Error + Send + 'static> StorageExt<E> for T {
+impl<T: Storage<Error = DbError>> StorageExt for T {
     async fn add_event(
         &mut self,
         event: Event,
         room_id: &str,
-    ) -> Result<String, AddEventError<E>> {
+    ) -> Result<String, AddEventError> {
         let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
             Some(v) => {
                 (serde_json::from_value(v.content).map_err(AddEventError::InvalidPowerLevels)?,
@@ -106,7 +116,7 @@ impl<T: Storage<Error = E>, E: Error + Send + 'static> StorageExt<E> for T {
             origin: event.sender.split(':').nth(1).unwrap().to_string(),
             origin_server_ts: now,
             prev_events,
-            depth,
+            depth: depth + 1,
             auth_events: auth_events.clone(),
         }.finalize();
         let event_id = pdu.hashes.sha256.clone();
@@ -114,14 +124,28 @@ impl<T: Storage<Error = E>, E: Error + Send + 'static> StorageExt<E> for T {
         self.add_pdus(&[pdu]).await?;
         Ok(event_id)
     }
+
+    async fn create_test_users(&mut self) -> Result<(), DbError> {
+        // all passwords are "password"
+        self.create_user("alice", Some(
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
+        )).await?;
+        self.create_user("bob", Some(
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
+        )).await?;
+        self.create_user("carol", Some(
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
+        )).await?;
+        Ok(())
+    }
 }
 
-async fn validate_member_event<S: Storage<Error = E>, E: Error>(
+async fn validate_member_event<S: Storage<Error = DbError>>(
     db: &mut S,
     event: &Event,
     room_id: &str,
     power_levels: &room::PowerLevels,
-) -> Result<(), AddEventError<E>> {
+) -> Result<(), AddEventError> {
     let sender_membership = db.get_membership(&event.sender, room_id).await?;
     let affected_user = event.state_key.clone().ok_or_else(
         || AddEventError::InvalidEvent(format!("no state key in m.room.member event"))
@@ -194,4 +218,11 @@ async fn validate_member_event<S: Storage<Error = E>, E: Error>(
         Knock => unimplemented!(),
     }
     Ok(())
+}
+
+#[post("/_debug/print_the_world")]
+pub async fn print_the_world(state: Data<Arc<ServerState>>) -> String {
+    let mut db = state.db_pool.get_handle().await.unwrap();
+    db.print_the_world().await.unwrap();
+    String::new()
 }

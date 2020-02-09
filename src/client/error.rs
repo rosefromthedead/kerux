@@ -13,7 +13,9 @@ use std::{
     string::FromUtf8Error,
 };
 
-use crate::util::AddEventError;
+use crate::{storage::StorageManager, util::AddEventError};
+
+type DbError = <crate::StorageManager as StorageManager>::Error;
 
 //TODO: should we expose any variant fields in display impl?
 #[derive(Debug, Display)]
@@ -43,7 +45,7 @@ pub enum Error {
     /// An encoded string in the URL was not valid UTF-8.
     UrlNotUtf8(Utf8Error),
     /// A database error occurred.
-    DbError(pg::Error),
+    DbError(DbError),
     /// An I/O error occurred.
     IoError(IoError),
     /// A password error occurred.
@@ -51,7 +53,7 @@ pub enum Error {
     /// The requested feature is unimplemented.
     Unimplemented,
     /// An invalid event was sent to a room.
-    AddEventError(AddEventError<pg::Error>),
+    AddEventError(AddEventError),
     /// An unknown error occurred.
     Unknown(String),
 }
@@ -187,8 +189,8 @@ impl From<IoError> for Error {
     }
 }
 
-impl From<pg::Error> for Error {
-    fn from(e: pg::Error) -> Self {
+impl From<DbError> for Error {
+    fn from(e: DbError) -> Self {
         Error::DbError(e)
     }
 }
@@ -199,8 +201,8 @@ impl From<argon2::Error> for Error {
     }
 }
 
-impl From<AddEventError<pg::Error>> for Error {
-    fn from(e: AddEventError<pg::Error>) -> Self {
+impl From<AddEventError> for Error {
+    fn from(e: AddEventError) -> Self {
         match e {
             AddEventError::DbError(e) => Error::DbError(e),
             _ => Error::AddEventError(e),

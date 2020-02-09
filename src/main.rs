@@ -10,6 +10,11 @@ mod log;
 mod storage;
 mod util;
 
+use storage::StorageManager as _;
+use util::StorageExt;
+
+type StorageManager = storage::mem::MemStorageManager;
+
 #[derive(Deserialize)]
 pub struct Config {
     domain: String,
@@ -18,20 +23,16 @@ pub struct Config {
 
 pub struct ServerState {
     pub config: Config,
-    pub db_pool: storage::postgres::DbPool,
+    pub db_pool: StorageManager,
 }
 
-fn main() {
-    run().map_err(|e| {
-        eprintln!("{:?}", e);
-    }).unwrap();
-}
-
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+#[actix_rt::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let config = toml::from_slice(&std::fs::read("config.toml")?)?;
-    let db_pool = storage::postgres::DbPool::new(String::from("host=/run/postgresql/ user=postgres dbname=matrix"), 64);
+    let db_pool = storage::mem::MemStorageManager::new();
+    db_pool.get_handle().await?.create_test_users().await?;
     let server_state = Arc::new(ServerState { config, db_pool });
 
     let server_state2 = Arc::clone(&server_state);
@@ -41,9 +42,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .data(Arc::clone(&server_state))
             .data(JsonConfig::default().error_handler(|e, _req| client::error::Error::from(e).into()))
             .service(web::scope("/_matrix/client").configure(client::cs_api))
+            .service(util::print_the_world)
     })
     .bind(&server_state2.config.bind_address)?
-    .run();
-
+    .run().await?;
     Ok(())
 }
