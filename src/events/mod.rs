@@ -53,6 +53,7 @@ pub struct UnhashedPdu {
 }
 
 /// A Persistent Data Unit (room event) for room version 4.
+#[derive(Clone, Debug)]
 pub struct PduV4 {
     pub room_id: String,
     pub sender: String,
@@ -70,7 +71,7 @@ pub struct PduV4 {
     pub signatures: Map<String, JsonValue>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EventHash {
     pub sha256: String,
 }

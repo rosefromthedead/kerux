@@ -30,9 +30,12 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(user::get_display_name)
         .service(user::set_display_name)
         .service(user::get_profile)
+        .service(user::search_user_directory)
 
         .service(room::create_room)
-        
+        .service(room::invite)
+        .service(room::join_by_id_or_alias)
+
         .service(room_events::sync)
         .service(room_events::get_event)
         .service(room_events::get_state_event_no_key)
@@ -49,6 +52,7 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
 async fn versions() -> Json<serde_json::Value> {
     Json(json!({
         "versions": [
+            "r0.5.0",
             "r0.6.0"
         ]
     }))

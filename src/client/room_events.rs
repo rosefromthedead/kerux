@@ -172,8 +172,14 @@ pub async fn sync(
                 } else {
                     State { events: Vec::new() }
                 };
-                //TODO: what happens if since == none
-                let since_param = req.since.as_deref().map(str::parse).unwrap_or(Ok(0))
+                let since_param;
+                since_param = req.since.as_deref().map(|s| {
+                    if s.len() != 0 {
+                        str::parse(s)
+                    } else {
+                        Ok(0)
+                    }
+                }).unwrap_or(Ok(0))
                     .map_err(|e| Error::InvalidParam(format!("invalid since param: {}", e)))?;
                 let timeline = Timeline {
                     events: db.get_events_since(&room_id, since_param).await?,
@@ -387,13 +393,6 @@ pub async fn send_state_event(
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
 
-    if db.get_membership(
-        &user_id,
-        &room_id
-    ).await? != Some(Membership::Join) {
-        return Err(Error::Forbidden);
-    }
-
     let event = Event {
         room_id: None,
         sender: user_id,
@@ -424,13 +423,6 @@ pub async fn send_event(
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
-
-    if db.get_membership(
-        &user_id,
-        &room_id
-    ).await? != Some(Membership::Join) {
-        return Err(Error::Forbidden);
-    }
 
     let event = Event {
         room_id: None,
