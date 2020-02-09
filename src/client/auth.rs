@@ -92,14 +92,16 @@ pub struct LoginResponse {
     user_id: String,
     access_token: String,
     device_id: String,
+    //TODO: This is deprecated, but Fractal is the only client that doesn't require it. Remove it
+    // once all the other clients have updated to current spec
+    home_server: String,
 }
 
 #[post("/login")]
 pub async fn login(
     state: Data<Arc<ServerState>>,
     req: Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, Error>
-{
+) -> Result<Json<LoginResponse>, Error> {
     let req = req.into_inner();
 
     let username = match req.identifier {
@@ -123,6 +125,7 @@ pub async fn login(
         user_id,
         access_token,
         device_id,
+        home_server: state.config.domain.clone(),
     }))
 }
 
