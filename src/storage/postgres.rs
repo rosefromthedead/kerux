@@ -32,7 +32,6 @@ impl DbPool {
             queue: Arc::new(ArrayQueue::new(cap)),
         }
     }
-
 }
 
 #[async_trait]
@@ -89,7 +88,6 @@ impl Drop for ClientGuard {
 #[async_trait]
 impl super::Storage for ClientGuard {
     type Error = pg::Error;
-    type AccessToken = uuid::Uuid;
 
     async fn create_user(&mut self, username: &str, password_hash: Option<&str>) -> Result<(), DbError> {
         let db = self.inner.as_mut().unwrap();
@@ -107,7 +105,7 @@ impl super::Storage for ClientGuard {
             None => return Ok(false),
         };
 
-        match argon2::verify_encoded(user.try_get("password_hash")?, password.as_bytes()) {
+        match argon2::verify_encoded(user.get("password_hash"), password.as_bytes()) {
             Ok(true) => Ok(true),
             Ok(false) | Err(_) => Ok(false),
         }
@@ -218,7 +216,7 @@ impl super::Storage for ClientGuard {
     }
 
     async fn get_memberships_by_user(&mut self, user_id: &str)
-            -> Result<Vec<(String, Membership)>, DbError> {
+            -> Result<HashMap<String, Membership>, DbError> {
         let db = self.inner.as_mut().unwrap();
         let query = db.prepare("
             SELECT room_id, membership FROM room_memberships WHERE user_id = $1;
@@ -229,7 +227,7 @@ impl super::Storage for ClientGuard {
                 let membership = membership_str.parse().unwrap();
                 (row.get("room_id"), membership)
             })
-            .collect::<Vec<(_, _)>>();
+            .collect::<HashMap<_, _>>();
         Ok(memberships)
     }
 
