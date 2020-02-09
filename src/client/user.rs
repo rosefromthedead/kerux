@@ -1,7 +1,8 @@
 use actix_web::{
     web::{Data, Json, Path},
-    get, put,
+    get, post, put,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
@@ -152,4 +153,51 @@ pub async fn get_profile(
     }
 
     Ok(Json(response.into()))
+}
+
+#[derive(Deserialize)]
+pub struct UserDirSearchRequest {
+    search_term: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct UserDirSearchResponse {
+    results: Vec<User>,
+    limited: bool,
+}
+
+#[derive(Serialize)]
+struct User {
+    user_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+}
+
+//TODO: actually implement this
+#[post("/user_directory/search")]
+pub async fn search_user_directory(
+    state: Data<Arc<ServerState>>,
+    req: Json<UserDirSearchRequest>,
+) -> Result<Json<UserDirSearchResponse>, Error> {
+    let req = req.into_inner();
+    let mut db = state.db_pool.get_handle().await?;
+    let user_profile = db.get_profile(&req.search_term).await?;
+    match user_profile {
+        Some(p) => Ok(Json(UserDirSearchResponse {
+            results: vec![User {
+                user_id: req.search_term.clone(),
+                avatar_url: p.avatar_url,
+                display_name: p.displayname,
+            }],
+            limited: false,
+        })),
+        None => Ok(Json(UserDirSearchResponse {
+            results: Vec::new(),
+            limited: false,
+        })),
+    }
 }

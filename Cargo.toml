@@ -5,6 +5,7 @@ authors = ["Rose Hudson <rose@krx.sh>"]
 edition = "2018"
 
 [dependencies]
+actix-rt = "1.0.0"
 actix-web = "2.0.0"
 async-trait = "0.1.22"
 base64 = "0.10"

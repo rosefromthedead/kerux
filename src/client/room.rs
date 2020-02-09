@@ -323,6 +323,7 @@ pub async fn invite(
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = format!("@{}:{}", username, state.config.domain);
     let invitee = req.into_inner().user_id;
+    let invitee_profile = db.get_profile(&invitee).await?.unwrap_or_default();
 
     let invite_event = Event {
         room_id: None,
@@ -330,8 +331,8 @@ pub async fn invite(
         ty: "m.room.member".to_string(),
         state_key: Some(invitee),
         content: to_value(&room::Member {
-            avatar_url: None,
-            displayname: None,
+            avatar_url: invitee_profile.avatar_url,
+            displayname: invitee_profile.displayname,
             membership: room::Membership::Invite,
             is_direct: false,
         }).unwrap(),
@@ -344,4 +345,40 @@ pub async fn invite(
     db.add_event(invite_event, &room_id).await?;
 
     Ok(Json(()))
+}
+
+#[post("/join/{room_id_or_alias}")]
+pub async fn join_by_id_or_alias(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+    room_id_or_alias: Path<String>,
+) -> Result<Json<JsonValue>, Error> {
+    //TODO: implement server_name and third_party_signed args, and room aliases
+    let mut db = state.db_pool.get_handle().await?;
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let user_id = format!("@{}:{}", username, state.config.domain);
+    let profile = db.get_profile(&username).await?.unwrap_or_default();
+
+    let event = Event {
+        room_id: None,
+        sender: user_id.clone(),
+        ty: "m.room.member".to_string(),
+        state_key: Some(user_id.clone()),
+        content: to_value(&room::Member {
+            avatar_url: profile.avatar_url,
+            displayname: profile.displayname,
+            membership: room::Membership::Join,
+            is_direct: false,
+        }).unwrap(),
+        unsigned: None,
+        redacts: None,
+        event_id: None,
+        origin_server_ts: None,
+    };
+
+    db.add_event(event, &room_id_or_alias).await?;
+
+    Ok(Json(serde_json::json!({
+        "room_id": *room_id_or_alias
+    })))
 }
