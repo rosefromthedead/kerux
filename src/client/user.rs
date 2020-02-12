@@ -12,26 +12,22 @@ use crate::{
         error::Error,
     },
     storage::{Storage, StorageManager, UserProfile},
+    util::MatrixId,
     ServerState,
 };
 
 #[get("/profile/{user_id}/avatar_url")]
 pub async fn get_avatar_url(
     state: Data<Arc<ServerState>>,
-    user_id: Path<String>
+    user_id: Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let (username, domain) = {
-        let mut iter = user_id.trim_start_matches('@').split(':');
-        let user_id = iter.next().unwrap();
-        let domain = iter.next().ok_or(Error::Unknown("Domain must be provided".to_string()))?;
-        (user_id, domain)
-    };
-    if domain != state.config.domain {
+    let user_id = user_id.into_inner();
+    if user_id.domain() != state.config.domain {
         return Err(Error::Unimplemented);
     }
 
     let mut db = state.db_pool.get_handle().await?;
-    let avatar_url = match db.get_profile(username).await?.unwrap().avatar_url {
+    let avatar_url = match db.get_profile(&user_id.localpart()).await?.unwrap().avatar_url {
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
@@ -45,22 +41,16 @@ pub async fn get_avatar_url(
 pub async fn set_avatar_url(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req_id: Path<String>,
+    req_id: Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
     let mut db = state.db_pool.get_handle().await?;
-    let user_id = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    if *req_id != user_id {
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    if *req_id.localpart() != username {
         return Err(Error::Forbidden);
     }
 
-    let (username, domain) = {
-        let mut iter = user_id.trim_start_matches('@').split(':');
-        let user_id = iter.next().unwrap();
-        let domain = iter.next().ok_or(Error::Unknown("Domain must be provided".to_string()))?;
-        (user_id, domain)
-    };
-    if domain != state.config.domain {
+    if *req_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
@@ -74,20 +64,15 @@ pub async fn set_avatar_url(
 #[get("/profile/{user_id}/displayname")]
 pub async fn get_display_name(
     state: Data<Arc<ServerState>>,
-    user_id: Path<String>
+    user_id: Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let (username, domain) = {
-        let mut iter = user_id.trim_start_matches('@').split(':');
-        let username = iter.next().unwrap();
-        let domain = iter.next().ok_or(Error::Unknown("Domain must be provided".to_string()))?;
-        (username, domain)
-    };
-    if domain != state.config.domain {
+    let user_id = user_id.into_inner();
+    if user_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
     let mut db = state.db_pool.get_handle().await?;
-    let displayname = match db.get_profile(username).await?.unwrap().displayname {
+    let displayname = match db.get_profile(&user_id.localpart()).await?.unwrap().displayname {
         Some(v) => v,
         None => return Err(Error::NotFound),
     };
@@ -101,22 +86,16 @@ pub async fn get_display_name(
 pub async fn set_display_name(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req_id: Path<String>,
+    req_id: Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
     let mut db = state.db_pool.get_handle().await?;
-    let user_id = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    if *req_id != user_id {
+    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    if *req_id.domain() != username {
         return Err(Error::Forbidden);
     }
 
-    let (username, domain) = {
-        let mut iter = user_id.trim_start_matches('@').split(':');
-        let user_id = iter.next().unwrap();
-        let domain = iter.next().ok_or(Error::Unknown("Domain must be provided".to_string()))?;
-        (user_id, domain)
-    };
-    if domain != state.config.domain {
+    if *req_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
@@ -130,20 +109,15 @@ pub async fn set_display_name(
 #[get("/profile/{user_id}")]
 pub async fn get_profile(
     state: Data<Arc<ServerState>>,
-    user_id: Path<String>
+    user_id: Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let (username, domain) = {
-        let mut iter = user_id.trim_start_matches('@').split(':');
-        let username = iter.next().unwrap();
-        let domain = iter.next().ok_or(Error::Unknown("Domain must be provided".to_string()))?;
-        (username, domain)
-    };
-    if domain != state.config.domain {
+    let user_id = user_id.into_inner();
+    if user_id.domain() != state.config.domain {
         return Err(Error::Unimplemented);
     }
 
     let mut db = state.db_pool.get_handle().await?;
-    let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
+    let UserProfile { avatar_url, displayname } = db.get_profile(&user_id.localpart()).await?.unwrap();
     let mut response = serde_json::Map::new();
     if let Some(v) = avatar_url {
         response.insert("avatar_url".into(), v.into());
@@ -170,7 +144,7 @@ pub struct UserDirSearchResponse {
 
 #[derive(Serialize)]
 struct User {
-    user_id: String,
+    user_id: MatrixId,
     #[serde(skip_serializing_if = "Option::is_none")]
     avatar_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,11 +159,13 @@ pub async fn search_user_directory(
 ) -> Result<Json<UserDirSearchResponse>, Error> {
     let req = req.into_inner();
     let mut db = state.db_pool.get_handle().await?;
-    let user_profile = db.get_profile(&req.search_term).await?;
+    let searched_user = MatrixId::new(&req.search_term, &state.config.domain)
+        .map_err(|e| Error::Unknown(e.to_string()))?;
+    let user_profile = db.get_profile(searched_user.localpart()).await?;
     match user_profile {
         Some(p) => Ok(Json(UserDirSearchResponse {
             results: vec![User {
-                user_id: req.search_term.clone(),
+                user_id: searched_user,
                 avatar_url: p.avatar_url,
                 display_name: p.displayname,
             }],

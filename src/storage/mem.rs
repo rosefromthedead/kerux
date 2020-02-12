@@ -7,7 +7,7 @@ use std::{
 };
 use uuid::Uuid;
 
-use crate::{events::{room::{Member, Membership}, Event, PduV4}, storage::UserProfile};
+use crate::{events::{room::{Member, Membership}, Event, PduV4}, storage::UserProfile, util::MatrixId};
 
 #[derive(Debug)]
 struct MemStorage {
@@ -198,13 +198,13 @@ impl super::Storage for MemStorageHandle {
 
     async fn get_memberships_by_user(
         &mut self,
-        user_id: &str,
+        user_id: &MatrixId,
     ) -> Result<HashMap<String, Membership>, Self::Error> {
         let db = self.inner.read()?;
         let mut ret = HashMap::new();
         for (room_id, room) in db.rooms.iter() {
             for pdu in room.events.iter().rev() {
-                if pdu.ty == "m.room.member" && pdu.state_key.as_deref() == Some(user_id) {
+                if pdu.ty == "m.room.member" && pdu.state_key.as_deref() == Some(user_id.as_str()) {
                     let content: Member = serde_json::from_value(pdu.content.clone())
                         .map_err(Error::InvalidMemberEvent)?;
                     ret.insert(room_id.clone(), content.membership);
@@ -217,13 +217,13 @@ impl super::Storage for MemStorageHandle {
 
     async fn get_membership(
         &mut self,
-        user_id: &str,
+        user_id: &MatrixId,
         room_id: &str,
     ) -> Result<Option<Membership>,Error> {
         let db = self.inner.read()?;
         let member_event = db.rooms.get(room_id)
             .map(|r| r.events.iter().rev()
-                .find(|e| e.ty == "m.room.member" && e.state_key.as_deref() == Some(user_id))
+                .find(|e| e.ty == "m.room.member" && e.state_key.as_deref() == Some(user_id.as_str()))
             ).flatten();
         match member_event {
             Some(e) => {

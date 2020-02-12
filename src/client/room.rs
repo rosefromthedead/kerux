@@ -15,7 +15,7 @@ use crate::{
         room, Event, UnhashedPdu,
     },
     storage::{Storage, StorageManager, UserProfile},
-    util::StorageExt,
+    util::{MatrixId, StorageExt},
     ServerState,
 };
 
@@ -75,7 +75,7 @@ pub async fn create_room(
     let req = req.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let room_version = req.room_version.unwrap_or("4".to_string());
     let is_direct = req.is_direct.unwrap_or(false);
@@ -129,7 +129,7 @@ pub async fn create_room(
         origin: state.config.domain.clone(),
         origin_server_ts: now,
         ty: "m.room.member".to_string(),
-        state_key: Some(user_id.clone()),
+        state_key: Some(user_id.clone_inner()),
         content: creator_join,
         prev_events: vec![room_create_event.hashes.sha256.clone()],
         depth: 1,
@@ -309,7 +309,7 @@ pub async fn create_room(
 
 #[derive(Deserialize)]
 pub struct InviteRequest {
-    user_id: String,
+    user_id: MatrixId,
 }
 
 #[post("/rooms/{room_id}/invite")]
@@ -321,15 +321,15 @@ pub async fn invite(
 ) -> Result<Json<()>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let invitee = req.into_inner().user_id;
-    let invitee_profile = db.get_profile(&invitee).await?.unwrap_or_default();
+    let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
 
     let invite_event = Event {
         room_id: None,
         sender: user_id.clone(),
         ty: "m.room.member".to_string(),
-        state_key: Some(invitee),
+        state_key: Some(invitee.clone_inner()),
         content: to_value(&room::Member {
             avatar_url: invitee_profile.avatar_url,
             displayname: invitee_profile.displayname,
@@ -356,14 +356,14 @@ pub async fn join_by_id_or_alias(
     //TODO: implement server_name and third_party_signed args, and room aliases
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let profile = db.get_profile(&username).await?.unwrap_or_default();
 
     let event = Event {
         room_id: None,
         sender: user_id.clone(),
         ty: "m.room.member".to_string(),
-        state_key: Some(user_id.clone()),
+        state_key: Some(user_id.to_string()),
         content: to_value(&room::Member {
             avatar_url: profile.avatar_url,
             displayname: profile.displayname,

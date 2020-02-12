@@ -16,7 +16,7 @@ use crate::{
         room::Membership,
     },
     storage::{Storage, StorageManager},
-    util::StorageExt,
+    util::{MatrixId, StorageExt},
     ServerState,
 };
 
@@ -128,7 +128,7 @@ struct StrippedState {
     state_key: String,
     #[serde(rename = "type")]
     ty: String,
-    sender: String,
+    sender: MatrixId,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,7 +151,7 @@ pub async fn sync(
 ) -> Result<Json<SyncResponse>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let memberships = db.get_memberships_by_user(&user_id).await?;
     let mut join = HashMap::new();
@@ -250,9 +250,10 @@ pub async fn get_event(
     let (room_id, event_id) = path_args.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
         return Err(Error::Forbidden);
@@ -290,9 +291,10 @@ pub async fn get_state_event_inner(
 ) -> Result<Json<Event>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
         return Err(Error::Forbidden);
@@ -313,9 +315,10 @@ pub async fn get_state(
     let room_id = room_id.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     match db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? {
         Some(Membership::Join) => {},
@@ -350,9 +353,10 @@ pub async fn get_members(
 ) -> Result<Json<MembersResponse>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     
     match db.get_membership(
-        &format!("@{}:{}", username, state.config.domain),
+        &user_id,
         &room_id
     ).await? {
         Some(Membership::Join) => {},
@@ -391,7 +395,7 @@ pub async fn send_state_event(
     let (room_id, event_type, state_key) = req.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
         room_id: None,
@@ -422,7 +426,7 @@ pub async fn send_event(
     let (room_id, event_type, _txn_id) = req.into_inner();
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
         room_id: None,

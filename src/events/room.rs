@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+use crate::util::MatrixId;
+
 /// m.room.create
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Create {
-    pub creator: String,
+    pub creator: MatrixId,
     pub room_version: Option<String>,
     pub predecessor: Option<PreviousRoom>,
     #[serde(flatten)]
@@ -81,7 +83,7 @@ pub struct PowerLevels {
     events: HashMap<String, u32>,
     events_default: Option<u32>,
     state_default: Option<u32>,
-    users: HashMap<String, u32>,
+    users: HashMap<MatrixId, u32>,
     users_default: Option<u32>,
     notifications: Notifications,
 }
@@ -91,9 +93,9 @@ impl PowerLevels {
     /// The values are the same as when there is an event but the values are unspecified
     /// (i.e. `None`), with the exception that state_default is 0 and the creator of the room has
     /// power level 100.
-    pub fn no_event_default_levels(room_creator: &str) -> Self {
+    pub fn no_event_default_levels(room_creator: &MatrixId) -> Self {
         let mut users = HashMap::new();
-        users.insert(room_creator.to_string(), 100);
+        users.insert(room_creator.clone(), 100);
         PowerLevels {
             ban: Some(50),
             invite: Some(50),
@@ -124,7 +126,7 @@ impl PowerLevels {
         self.kick.unwrap_or(50)
     }
 
-    pub fn get_user_level(&self, user_id: &str) -> u32 {
+    pub fn get_user_level(&self, user_id: &MatrixId) -> u32 {
         self.users.get(user_id).copied().unwrap_or(self.users_default.unwrap_or(0))
     }
 
