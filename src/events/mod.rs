@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_canonical::ser::to_string as to_canonical_json;
 use serde_json::{Map, Value as JsonValue};
 
+use crate::util::MatrixId;
+
 pub mod room;
 
 #[derive(Debug, Serialize)]
@@ -11,7 +13,7 @@ pub struct Event {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_id: Option<String>,
-    pub sender: String,
+    pub sender: MatrixId,
     #[serde(rename = "type")]
     pub ty: String,
     #[serde(default)]
@@ -37,7 +39,7 @@ pub struct Event {
 #[derive(Serialize)]
 pub struct UnhashedPdu {
     pub room_id: String,
-    pub sender: String,
+    pub sender: MatrixId,
     #[serde(rename = "type")]
     pub ty: String,
     pub state_key: Option<String>,
@@ -56,7 +58,7 @@ pub struct UnhashedPdu {
 #[derive(Clone, Debug)]
 pub struct PduV4 {
     pub room_id: String,
-    pub sender: String,
+    pub sender: MatrixId,
     pub ty: String,
     pub state_key: Option<String>,
     pub content: JsonValue,

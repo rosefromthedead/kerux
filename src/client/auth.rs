@@ -8,7 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{client::error::Error, storage::{Storage, StorageManager}, ServerState};
+use crate::{client::error::Error, storage::{Storage, StorageManager}, util::MatrixId, ServerState};
 
 #[derive(Debug, Deserialize)]
 enum LoginType {
@@ -89,7 +89,7 @@ enum Identifier {
 
 #[derive(Serialize)]
 pub struct LoginResponse {
-    user_id: String,
+    user_id: MatrixId,
     access_token: String,
     device_id: String,
     //TODO: This is deprecated, but Fractal is the only client that doesn't require it. Remove it
@@ -118,7 +118,7 @@ pub async fn login(
     let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
     let access_token = db.create_access_token(&username, &device_id).await?;
 
-    let user_id = format!("@{}:{}", username, state.config.domain);
+    let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let access_token = format!("{}", access_token.to_hyphenated());
 
     Ok(Json(LoginResponse {
@@ -170,11 +170,14 @@ pub async fn register(
         None => return Err(Error::MissingParam("kind".to_string())),
     }
 
+    let user_id = MatrixId::new(&req.username, &state.config.domain)
+        .map_err(|e| Error::BadJson(format!("{}", e)))?;
+
     let salt: [u8; 16] = rand::random();
     let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
 
     let mut db = state.db_pool.get_handle().await?;
-    db.create_user(&req.username, Some(&password_hash)).await?;
+    db.create_user(&user_id.localpart(), Some(&password_hash)).await?;
     if req.inhibit_login {
         return Ok(Json(json!({
             "user_id": req.username
@@ -182,9 +185,7 @@ pub async fn register(
     }
     
     let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
-    let access_token = db.create_access_token(&req.username, &device_id).await?;
-
-    let user_id = format!("@{}:{}", req.username, state.config.domain);
+    let access_token = db.create_access_token(&user_id.localpart(), &device_id).await?;
     let access_token = format!("{}", access_token.to_hyphenated());
 
     Ok(Json(json!({

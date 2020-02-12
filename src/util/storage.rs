@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use displaydoc::Display;
+use std::convert::TryInto;
 
 use crate::{
     events::{Event, UnhashedPdu, room},
     storage::{Storage, StorageManager},
+    util::{MatrixId, MxidError},
 };
 
 type DbError = <crate::StorageManager as StorageManager>::Error;
@@ -106,7 +108,7 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
             content: event.content,
             unsigned: event.unsigned,
             redacts: event.redacts,
-            origin: event.sender.split(':').nth(1).unwrap().to_string(),
+            origin: event.sender.domain().to_string(),
             origin_server_ts: now,
             prev_events,
             depth: depth + 1,
@@ -141,8 +143,8 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
 ) -> Result<(), AddEventError> {
     let sender_membership = db.get_membership(&event.sender, room_id).await?;
     let affected_user = event.state_key.clone().ok_or_else(
-        || AddEventError::InvalidEvent(format!("no state key in m.room.member event"))
-    )?;
+        || AddEventError::InvalidEvent("no state key in m.room.member event".to_string())
+    )?.try_into().map_err(|e: MxidError| AddEventError::InvalidEvent(e.to_string()))?;
     let prev_membership = db.get_membership(&affected_user, room_id).await?;
     let new_member_content: room::Member = serde_json::from_value(event.content.clone())
         .map_err(|e| AddEventError::InvalidEvent(format!("{}", e)))?;
@@ -178,7 +180,7 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
             if sender_membership != Some(room::Membership::Join) {
                 return Err(AddEventError::UserNotInRoom);
             }
-            if event.state_key.as_ref() != Some(&event.sender) {
+            if event.state_key.as_deref() != Some(event.sender.as_str()) {
                 // users can set own membership to leave, but setting others'
                 // to leave is kicking and you need permission for that
                 let user_level = power_levels.get_user_level(&event.sender);

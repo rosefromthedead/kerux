@@ -3,10 +3,13 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::events::{room::Membership, Event, PduV4};
+use crate::{
+    events::{room::Membership, Event, PduV4},
+    util::MatrixId,
+};
 
 pub mod mem;
-pub mod postgres;
+//pub mod postgres;
 
 #[derive(Clone, Debug, Default)]
 pub struct UserProfile {
@@ -71,12 +74,12 @@ pub trait Storage: Send {
 
     async fn get_memberships_by_user(
         &mut self,
-        user_id: &str,
+        user_id: &MatrixId,
     ) -> Result<HashMap<String, Membership>, Self::Error>;
 
     async fn get_membership(
         &mut self,
-        user_id: &str,
+        user_id: &MatrixId,
         room_id: &str,
     ) -> Result<Option<Membership>, Self::Error>;
 

@@ -2,7 +2,10 @@ use displaydoc::Display;
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
+use std::{
+    convert::TryFrom,
+    ops::Deref,
+};
 
 lazy_static! {
     static ref SERVER_NAME_REGEX: Regex =
@@ -10,9 +13,10 @@ lazy_static! {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
+#[serde(try_from = "String")]
 pub struct MatrixId(String);
 
-#[derive(Display)]
+#[derive(Debug, Display)]
 pub enum MxidError {
     /// A Matrix ID can only be 255 characters long, including the '@', localpart, ':' and domain.
     TooLong,
@@ -29,6 +33,18 @@ pub enum MxidError {
 impl MatrixId {
     pub fn new(localpart: &str, domain: &str) -> Result<Self, MxidError> {
         Ok(MatrixId(format!("@{}:{}", localpart, domain)))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &*self.0
+    }
+
+    pub fn to_string(self) -> String {
+        self.0
+    }
+
+    pub fn clone_inner(&self) -> String {
+        self.0.clone()
     }
 
     pub fn localpart(&self) -> &str {
@@ -90,5 +106,13 @@ impl TryFrom<String> for MatrixId {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         MatrixId::validate_all(&value)?;
         Ok(MatrixId(value))
+    }
+}
+
+impl TryFrom<&str> for MatrixId {
+    type Error = MxidError;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        MatrixId::validate_all(value)?;
+        Ok(MatrixId(value.to_string()))
     }
 }
