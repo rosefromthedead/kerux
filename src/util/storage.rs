@@ -5,7 +5,7 @@ use std::convert::TryInto;
 use crate::{
     events::{Event, UnhashedPdu, room},
     storage::{Storage, StorageManager},
-    util::{MatrixId, MxidError},
+    util::MxidError,
 };
 
 type DbError = <crate::StorageManager as StorageManager>::Error;
