@@ -31,6 +31,7 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(user::set_display_name)
         .service(user::get_profile)
         .service(user::search_user_directory)
+        .service(user::get_3pids)
 
         .service(room::create_room)
         .service(room::invite)

@@ -177,3 +177,34 @@ pub async fn search_user_directory(
         })),
     }
 }
+
+#[derive(Serialize)]
+pub struct Get3pidsResponse {
+    threepids: Vec<Threepid>,
+}
+
+#[derive(Serialize)]
+struct Threepid {
+    medium: Medium,
+    address: String,
+    validated_at: u64,
+    added_at: u64,
+}
+
+#[derive(Serialize)]
+pub enum Medium {
+    Email,
+    // Phone number, including calling code
+    Msisdn,
+}
+
+#[get("/account/3pid")]
+pub async fn get_3pids(
+    _state: Data<Arc<ServerState>>,
+    _token: AccessToken,
+) -> Result<Json<Get3pidsResponse>, Error> {
+    //TODO: implement
+    Ok(Json(Get3pidsResponse {
+        threepids: Vec::new(),
+    }))
+}
