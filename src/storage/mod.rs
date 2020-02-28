@@ -17,6 +17,24 @@ pub struct UserProfile {
     pub displayname: Option<String>,
 }
 
+pub struct EventQuery {
+    ty: QueryType,
+    
+}
+
+enum QueryType {
+    /// Timeline queries return all events (confusingly, even state events) in a given timeframe.
+    Timeline {
+        from: u64,
+        to: u64,
+    },
+    /// State queries return all of the most recent state events with unique (type, state_key)
+    /// pairs, from a given point in time. This represents the full state of the room at that time.
+    State {
+        at: u64,
+    },
+}
+
 #[async_trait]
 pub trait StorageManager {
     type Handle: Storage;
