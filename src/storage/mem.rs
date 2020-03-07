@@ -2,12 +2,19 @@ use async_trait::async_trait;
 use displaydoc::Display;
 use serde_json::Value as JsonValue;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, PoisonError, RwLock},
 };
 use uuid::Uuid;
 
-use crate::{events::{room::{Member, Membership}, Event, PduV4}, storage::UserProfile, util::MatrixId};
+use crate::{
+    events::{
+        room::{Member, Membership},
+        Event, PduV4,
+    },
+    storage::UserProfile,
+    util::MatrixId,
+};
 
 #[derive(Debug)]
 struct MemStorage {
@@ -64,7 +71,7 @@ impl MemStorageManager {
                 rooms: HashMap::new(),
                 users: Vec::new(),
                 access_tokens: HashMap::new(),
-            }))
+            })),
         }
     }
 }
@@ -161,24 +168,24 @@ impl super::Storage for MemStorageHandle {
             .map(|u| u.profile.clone()))
     }
 
-    async fn set_avatar_url(
-        &mut self,
-        username: &str,
-        avatar_url: &str,
-    ) -> Result<(), Error> {
+    async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), Error> {
         let mut db = self.inner.write()?;
-        let user = db.users.iter_mut().find(|u| u.username == username).ok_or(Error::UserNotFound)?;
+        let user = db
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or(Error::UserNotFound)?;
         user.profile.avatar_url = Some(avatar_url.to_string());
         Ok(())
     }
 
-    async fn set_display_name(
-        &mut self,
-        username: &str,
-        display_name: &str,
-    ) -> Result<(), Error> {
+    async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), Error> {
         let mut db = self.inner.write()?;
-        let user = db.users.iter_mut().find(|u| u.username == username).ok_or(Error::UserNotFound)?;
+        let user = db
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or(Error::UserNotFound)?;
         user.profile.displayname = Some(display_name.to_string());
         Ok(())
     }
@@ -187,11 +194,14 @@ impl super::Storage for MemStorageHandle {
         let mut db = self.inner.write()?;
         for pdu in pdus {
             if pdu.ty == "m.room.create" {
-                db.rooms.insert(pdu.room_id.clone(), Room {
-                    events: Vec::new(),
-                });
+                db.rooms
+                    .insert(pdu.room_id.clone(), Room { events: Vec::new() });
             }
-            db.rooms.get_mut(&pdu.room_id).ok_or(Error::RoomNotFound)?.events.push(pdu.clone());
+            db.rooms
+                .get_mut(&pdu.room_id)
+                .ok_or(Error::RoomNotFound)?
+                .events
+                .push(pdu.clone());
         }
         Ok(())
     }
@@ -219,18 +229,23 @@ impl super::Storage for MemStorageHandle {
         &mut self,
         user_id: &MatrixId,
         room_id: &str,
-    ) -> Result<Option<Membership>,Error> {
+    ) -> Result<Option<Membership>, Error> {
         let db = self.inner.read()?;
-        let member_event = db.rooms.get(room_id)
-            .map(|r| r.events.iter().rev()
-                .find(|e| e.ty == "m.room.member" && e.state_key.as_deref() == Some(user_id.as_str()))
-            ).flatten();
+        let member_event = db
+            .rooms
+            .get(room_id)
+            .map(|r| {
+                r.events.iter().rev().find(|e| {
+                    e.ty == "m.room.member" && e.state_key.as_deref() == Some(user_id.as_str())
+                })
+            })
+            .flatten();
         match member_event {
             Some(e) => {
-                let content: Member = serde_json::from_value(e.content.clone())
-                    .map_err(Error::InvalidMemberEvent)?;
+                let content: Member =
+                    serde_json::from_value(e.content.clone()).map_err(Error::InvalidMemberEvent)?;
                 return Ok(Some(content.membership));
-            },
+            }
             None => Ok(None),
         }
     }
@@ -251,12 +266,12 @@ impl super::Storage for MemStorageHandle {
                         match content.membership {
                             Membership::Join => joined_member_count += 1,
                             Membership::Invite => invited_member_count += 1,
-                            _ => {},
+                            _ => {}
                         }
                     }
                 }
                 Ok((joined_member_count, invited_member_count))
-            },
+            }
             None => return Ok((0, 0)),
         }
     }
@@ -269,9 +284,8 @@ impl super::Storage for MemStorageHandle {
                 let mut ret = Vec::new();
                 let mut visited_state = HashSet::new();
                 for event in r.events.iter().rev().filter(|e| e.state_key.is_some()) {
-                    let is_unique = visited_state.insert(
-                        (event.ty.clone(), event.state_key.clone().unwrap())
-                    );
+                    let is_unique =
+                        visited_state.insert((event.ty.clone(), event.state_key.clone().unwrap()));
                     if is_unique {
                         ret.push(Event {
                             room_id: None,
@@ -287,7 +301,7 @@ impl super::Storage for MemStorageHandle {
                     }
                 }
                 return Ok(ret);
-            },
+            }
             None => return Ok(Vec::new()),
         }
     }
@@ -299,21 +313,26 @@ impl super::Storage for MemStorageHandle {
         state_key: &str,
     ) -> Result<Option<Event>, Error> {
         let db = self.inner.read()?;
-        let event = db.rooms.get(room_id).map(|r| {
-            r.events.iter().find(|e| 
-                e.ty == event_type && e.state_key.as_deref() == Some(state_key)
-            )
-        }).flatten().map(|event| Event {
-            room_id: None,
-            sender: event.sender.clone(),
-            ty: event.ty.clone(),
-            state_key: event.state_key.clone(),
-            content: event.content.clone(),
-            unsigned: event.unsigned.clone(),
-            redacts: event.redacts.clone(),
-            event_id: Some(event.hashes.sha256.clone()),
-            origin_server_ts: Some(event.origin_server_ts),
-        });
+        let event = db
+            .rooms
+            .get(room_id)
+            .map(|r| {
+                r.events
+                    .iter()
+                    .find(|e| e.ty == event_type && e.state_key.as_deref() == Some(state_key))
+            })
+            .flatten()
+            .map(|event| Event {
+                room_id: None,
+                sender: event.sender.clone(),
+                ty: event.ty.clone(),
+                state_key: event.state_key.clone(),
+                content: event.content.clone(),
+                unsigned: event.unsigned.clone(),
+                redacts: event.redacts.clone(),
+                event_id: Some(event.hashes.sha256.clone()),
+                origin_server_ts: Some(event.origin_server_ts),
+            });
         return Ok(event);
     }
 
@@ -341,7 +360,7 @@ impl super::Storage for MemStorageHandle {
                     });
                 }
                 return Ok(ret);
-            },
+            }
             None => return Ok(Vec::new()),
         }
     }
@@ -352,19 +371,22 @@ impl super::Storage for MemStorageHandle {
         event_id: &str,
     ) -> Result<Option<Event>, Self::Error> {
         let db = self.inner.read()?;
-        let event = db.rooms.get(room_id).map(|r| {
-            r.events.iter().find(|e| e.hashes.sha256 == event_id)
-        }).flatten().map(|event| Event {
-            room_id: None,
-            sender: event.sender.clone(),
-            ty: event.ty.clone(),
-            state_key: event.state_key.clone(),
-            content: event.content.clone(),
-            unsigned: event.unsigned.clone(),
-            redacts: event.redacts.clone(),
-            event_id: Some(event.hashes.sha256.clone()),
-            origin_server_ts: Some(event.origin_server_ts),
-        });
+        let event = db
+            .rooms
+            .get(room_id)
+            .map(|r| r.events.iter().find(|e| e.hashes.sha256 == event_id))
+            .flatten()
+            .map(|event| Event {
+                room_id: None,
+                sender: event.sender.clone(),
+                ty: event.ty.clone(),
+                state_key: event.state_key.clone(),
+                content: event.content.clone(),
+                unsigned: event.unsigned.clone(),
+                redacts: event.redacts.clone(),
+                event_id: Some(event.hashes.sha256.clone()),
+                origin_server_ts: Some(event.origin_server_ts),
+            });
         Ok(event)
     }
 
@@ -382,7 +404,7 @@ impl super::Storage for MemStorageHandle {
                     prev_event_ids.push(event.hashes.sha256.clone());
                 }
                 return Ok(Some((depth, prev_event_ids)));
-            },
+            }
             None => return Ok(None),
         }
     }
@@ -392,7 +414,9 @@ impl super::Storage for MemStorageHandle {
         username: &str,
     ) -> Result<HashMap<String, JsonValue>, Self::Error> {
         let db = self.inner.read()?;
-        let map = db.users.iter()
+        let map = db
+            .users
+            .iter()
             .find(|u| u.username == username)
             .map(|u| u.account_data.clone())
             .unwrap_or(HashMap::new());
