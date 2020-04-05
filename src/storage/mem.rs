@@ -3,16 +3,14 @@ use displaydoc::Display;
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
-    sync::{Arc, PoisonError, RwLock},
+    sync::Arc,
 };
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    events::{
-        room::{Member, Membership},
-        Event, PduV4,
-    },
-    storage::UserProfile,
+    events::{room::Membership, Event, PduV4},
+    storage::{EventQuery, QueryType, UserProfile},
     util::MatrixId,
 };
 
@@ -46,23 +44,13 @@ pub struct MemStorageHandle {
 
 #[derive(Debug, Display)]
 pub enum Error {
-    /// The lock on the storage has been poisoned because a thread panicked while holding it.
-    LockPoisoned,
     /// The specified user was not found.
     UserNotFound,
     /// The specified room was not found.
     RoomNotFound,
-    /// A member event in a room was invalid: {0}.
-    InvalidMemberEvent(serde_json::Error),
 }
 
 impl std::error::Error for Error {}
-
-impl<T> From<PoisonError<T>> for Error {
-    fn from(_: PoisonError<T>) -> Self {
-        Error::LockPoisoned
-    }
-}
 
 impl MemStorageManager {
     pub fn new() -> Self {
@@ -97,7 +85,7 @@ impl super::Storage for MemStorageHandle {
         username: &str,
         password_hash: Option<&str>,
     ) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         db.users.push(User {
             username: username.to_string(),
             password_hash: password_hash.unwrap().to_string(),
@@ -111,7 +99,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn verify_password(&mut self, username: &str, password: &str) -> Result<bool, Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         let user = db.users.iter().find(|u| u.username == username);
         if let Some(user) = user {
             match argon2::verify_encoded(&user.password_hash, password.as_bytes()) {
@@ -132,20 +120,20 @@ impl super::Storage for MemStorageHandle {
         username: &str,
         _device_id: &str,
     ) -> Result<Uuid, Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         let token = Uuid::new_v4();
         db.access_tokens.insert(token, username.to_string());
         Ok(token)
     }
 
     async fn delete_access_token(&mut self, token: Uuid) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         db.access_tokens.remove(&token);
         Ok(())
     }
 
     async fn delete_all_access_tokens(&mut self, token: Uuid) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         let username = match db.access_tokens.get(&token) {
             Some(v) => v.clone(),
             None => return Ok(()),
@@ -155,12 +143,12 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn try_auth(&mut self, token: Uuid) -> Result<Option<String>, Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         Ok(db.access_tokens.get(&token).cloned())
     }
 
     async fn get_profile(&mut self, username: &str) -> Result<Option<UserProfile>, Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         Ok(db
             .users
             .iter()
@@ -169,7 +157,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         let user = db
             .users
             .iter_mut()
@@ -180,7 +168,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         let user = db
             .users
             .iter_mut()
@@ -191,7 +179,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn add_pdus(&mut self, pdus: &[PduV4]) -> Result<(), Error> {
-        let mut db = self.inner.write()?;
+        let mut db = self.inner.write().await;
         for pdu in pdus {
             if pdu.ty == "m.room.create" {
                 db.rooms
@@ -206,163 +194,103 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn get_memberships_by_user(
-        &mut self,
-        user_id: &MatrixId,
-    ) -> Result<HashMap<String, Membership>, Self::Error> {
-        let db = self.inner.read()?;
-        let mut ret = HashMap::new();
-        for (room_id, room) in db.rooms.iter() {
-            for pdu in room.events.iter().rev() {
-                if pdu.ty == "m.room.member" && pdu.state_key.as_deref() == Some(user_id.as_str()) {
-                    let content: Member = serde_json::from_value(pdu.content.clone())
-                        .map_err(Error::InvalidMemberEvent)?;
-                    ret.insert(room_id.clone(), content.membership);
+    async fn query_pdus(&mut self, query: EventQuery) -> Result<Option<Vec<PduV4>>, Error> {
+        let db = self.inner.read().await;
+        let EventQuery {
+            query_type,
+            room,
+            timeout_ms,
+            senders,
+            not_senders,
+            types,
+            not_types,
+            contains_json,
+        } = query;
+        let room = match db.rooms.get(&room) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let max = room.events.len();
+        let base_slice = match &query_type {
+            &QueryType::Timeline { from, to } => {
+                &room.events[from..to.unwrap_or(max)]
+            },
+            &QueryType::State { at, .. } => {
+                &room.events[0..at.unwrap_or(max)]
+            },
+        };
+        for i in 0..2usize {
+            let base_iter = base_slice
+                .iter()
+                .filter(|e| {
+                    if !senders.is_empty() {
+                        senders.contains(&e.sender)
+                    } else {
+                        true
+                    }
+                })
+                .filter(|e| !not_senders.contains(&e.sender))
+                .filter(|e| {
+                    if !types.is_empty() {
+                        types.contains(&e.ty)
+                    } else {
+                        true
+                    }
+                })
+                .filter(|e| !not_types.contains(&e.ty));
+            
+            let ret: Vec<PduV4> = match &query_type {
+                QueryType::State { state_keys, not_state_keys, .. } => {
+                    base_iter.filter(|e| if !state_keys.is_empty() {
+                        match &e.state_key {
+                            Some(k) if state_keys.contains(&k) => true,
+                            _ => false,
+                        }
+                    } else {
+                        true
+                    }).filter(|e| match &e.state_key {
+                        Some(k) if !not_state_keys.contains(&k) => false,
+                        Some(_) => true,
+                        None => false
+                    }).cloned().collect()
+                },
+                _ => base_iter.cloned().collect(),
+            };
+            log::info!("{:?}", ret);
+            if !ret.is_empty() {
+                return Ok(Some(ret));
+            } else {
+                if i == 0 {
+                    log::info!("waiting...");
+                    tokio::time::delay_for(
+                        std::time::Duration::from_millis(timeout_ms as u64)
+                    ).await;
+                    log::info!("waited!");
+                } else if i == 1 {
                     break;
                 }
             }
         }
-        Ok(ret)
+        return Ok(Some(Vec::new()))
+        //TODO: contains_json
     }
 
-    async fn get_membership(
+    async fn get_memberships_by_user(
         &mut self,
         user_id: &MatrixId,
-        room_id: &str,
-    ) -> Result<Option<Membership>, Error> {
-        let db = self.inner.read()?;
-        let member_event = db
-            .rooms
-            .get(room_id)
-            .map(|r| {
-                r.events.iter().rev().find(|e| {
-                    e.ty == "m.room.member" && e.state_key.as_deref() == Some(user_id.as_str())
-                })
-            })
-            .flatten();
-        match member_event {
-            Some(e) => {
-                let content: Member =
-                    serde_json::from_value(e.content.clone()).map_err(Error::InvalidMemberEvent)?;
-                return Ok(Some(content.membership));
+    ) -> Result<HashMap<String, Membership>, Self::Error> {
+        let rooms = {
+            let db = self.inner.read().await;
+            db.rooms.keys().cloned().collect::<Vec<_>>()
+        };
+        let mut ret = HashMap::new();
+        for room_id in rooms {
+            let membership = self.get_membership(user_id, &room_id).await?;
+            if let Some(membership) = membership {
+                ret.insert(room_id.to_string(), membership);
             }
-            None => Ok(None),
         }
-    }
-
-    async fn get_room_member_counts(&mut self, room_id: &str) -> Result<(i64, i64), Error> {
-        let db = self.inner.read()?;
-        let room = db.rooms.get(room_id);
-        match room {
-            Some(r) => {
-                let mut visited_users = HashSet::new();
-                let mut joined_member_count = 0;
-                let mut invited_member_count = 0;
-                for event in r.events.iter().rev().filter(|e| e.ty == "m.room.member") {
-                    let have_visited = visited_users.insert(event.state_key.clone().unwrap());
-                    if !have_visited {
-                        let content: Member = serde_json::from_value(event.content.clone())
-                            .map_err(Error::InvalidMemberEvent)?;
-                        match content.membership {
-                            Membership::Join => joined_member_count += 1,
-                            Membership::Invite => invited_member_count += 1,
-                            _ => {}
-                        }
-                    }
-                }
-                Ok((joined_member_count, invited_member_count))
-            }
-            None => return Ok((0, 0)),
-        }
-    }
-
-    async fn get_full_state(&mut self, room_id: &str) -> Result<Vec<Event>, Error> {
-        let db = self.inner.read()?;
-        let room = db.rooms.get(room_id);
-        match room {
-            Some(r) => {
-                let mut ret = Vec::new();
-                let mut visited_state = HashSet::new();
-                for event in r.events.iter().rev().filter(|e| e.state_key.is_some()) {
-                    let is_unique =
-                        visited_state.insert((event.ty.clone(), event.state_key.clone().unwrap()));
-                    if is_unique {
-                        ret.push(Event {
-                            room_id: None,
-                            sender: event.sender.clone(),
-                            ty: event.ty.clone(),
-                            state_key: event.state_key.clone(),
-                            content: event.content.clone(),
-                            unsigned: event.unsigned.clone(),
-                            redacts: event.redacts.clone(),
-                            event_id: Some(event.hashes.sha256.clone()),
-                            origin_server_ts: Some(event.origin_server_ts),
-                        });
-                    }
-                }
-                return Ok(ret);
-            }
-            None => return Ok(Vec::new()),
-        }
-    }
-
-    async fn get_state_event(
-        &mut self,
-        room_id: &str,
-        event_type: &str,
-        state_key: &str,
-    ) -> Result<Option<Event>, Error> {
-        let db = self.inner.read()?;
-        let event = db
-            .rooms
-            .get(room_id)
-            .map(|r| {
-                r.events
-                    .iter()
-                    .find(|e| e.ty == event_type && e.state_key.as_deref() == Some(state_key))
-            })
-            .flatten()
-            .map(|event| Event {
-                room_id: None,
-                sender: event.sender.clone(),
-                ty: event.ty.clone(),
-                state_key: event.state_key.clone(),
-                content: event.content.clone(),
-                unsigned: event.unsigned.clone(),
-                redacts: event.redacts.clone(),
-                event_id: Some(event.hashes.sha256.clone()),
-                origin_server_ts: Some(event.origin_server_ts),
-            });
-        return Ok(event);
-    }
-
-    async fn get_events_since(
-        &mut self,
-        room_id: &str,
-        since: u64,
-    ) -> Result<Vec<Event>, Self::Error> {
-        let db = self.inner.read()?;
-        let room = db.rooms.get(room_id);
-        let mut ret = Vec::new();
-        match room {
-            Some(r) => {
-                for event in &r.events[since as usize..] {
-                    ret.push(Event {
-                        room_id: None,
-                        sender: event.sender.clone(),
-                        ty: event.ty.clone(),
-                        state_key: event.state_key.clone(),
-                        content: event.content.clone(),
-                        unsigned: event.unsigned.clone(),
-                        redacts: event.redacts.clone(),
-                        event_id: Some(event.hashes.sha256.clone()),
-                        origin_server_ts: Some(event.origin_server_ts),
-                    });
-                }
-                return Ok(ret);
-            }
-            None => return Ok(Vec::new()),
-        }
+        Ok(ret)
     }
 
     async fn get_event(
@@ -370,7 +298,7 @@ impl super::Storage for MemStorageHandle {
         room_id: &str,
         event_id: &str,
     ) -> Result<Option<Event>, Self::Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         let event = db
             .rooms
             .get(room_id)
@@ -394,7 +322,7 @@ impl super::Storage for MemStorageHandle {
         &mut self,
         room_id: &str,
     ) -> Result<Option<(i64, Vec<String>)>, Self::Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         let room = db.rooms.get(room_id);
         match room {
             Some(r) => {
@@ -413,7 +341,7 @@ impl super::Storage for MemStorageHandle {
         &mut self,
         username: &str,
     ) -> Result<HashMap<String, JsonValue>, Self::Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         let map = db
             .users
             .iter()
@@ -424,7 +352,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn print_the_world(&mut self) -> Result<(), Error> {
-        let db = self.inner.read()?;
+        let db = self.inner.read().await;
         log::info!("{:#?}", db);
         Ok(())
     }

@@ -103,3 +103,20 @@ impl UnhashedPdu {
         }
     }
 }
+
+impl PduV4 {
+    /// Turns a PDU into a format which is suitable for clients.
+    pub fn to_client_format(self) -> Event {
+        Event {
+            room_id: Some(self.room_id),
+            ty: self.ty,
+            sender: self.sender,
+            state_key: self.state_key,
+            content: self.content,
+            unsigned: self.unsigned,
+            redacts: self.redacts,
+            event_id: Some(self.hashes.sha256),
+            origin_server_ts: Some(self.origin_server_ts),
+        }
+    }
+}
