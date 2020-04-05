@@ -15,7 +15,7 @@ use crate::{
         Event,
         room::Membership,
     },
-    storage::{Storage, StorageManager},
+    storage::{EventQuery, Storage, StorageManager, QueryType},
     util::{MatrixId, StorageExt},
     ServerState,
 };
@@ -76,9 +76,9 @@ struct RoomSummary {
     #[serde(rename = "m.heroes")]
     heroes: Option<Vec<String>>,
     #[serde(rename = "m.joined_member_count")]
-    joined_member_count: i64,
+    joined_member_count: usize,
     #[serde(rename = "m.invited_member_count")]
-    invited_member_count: i64,
+    invited_member_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,12 +168,11 @@ pub async fn sync(
                     invited_member_count,
                 };
                 let state = if req.full_state {
-                    State { events: db.get_full_state(&room_id).await? }
+                    State { events: db.get_full_state(&room_id).await?.unwrap() }
                 } else {
                     State { events: Vec::new() }
                 };
-                let since_param;
-                since_param = req.since.as_deref().map(|s| {
+                let since: usize = req.since.as_deref().map(|s| {
                     if s.len() != 0 {
                         str::parse(s)
                     } else {
@@ -181,8 +180,21 @@ pub async fn sync(
                     }
                 }).unwrap_or(Ok(0))
                     .map_err(|e| Error::InvalidParam(format!("invalid since param: {}", e)))?;
+                let query = EventQuery {
+                    query_type: QueryType::Timeline {
+                        from: since, to: None,
+                    },
+                    room: room_id.to_string(),
+                    timeout_ms: req.timeout as usize,
+                    senders: Vec::new(),
+                    not_senders: Vec::new(),
+                    types: Vec::new(),
+                    not_types: Vec::new(),
+                    contains_json: None,
+                };
+                let events = db.query_events(query).await?.unwrap();
                 let timeline = Timeline {
-                    events: db.get_events_since(&room_id, since_param).await?,
+                    events,
                     limited: false,
                     prev_batch: String::from("placeholder_prev_batch"),
                 };
@@ -202,7 +214,7 @@ pub async fn sync(
                 });
             },
             Membership::Invite => {
-                let room_state = db.get_full_state(&room_id).await?;
+                let room_state = db.get_full_state(&room_id).await?.unwrap();
                 let events = room_state.into_iter().map(|event| StrippedState {
                     content: event.content,
                     state_key: event.state_key.unwrap(),
@@ -326,7 +338,7 @@ pub async fn get_state(
         None => return Err(Error::Forbidden),
     }
 
-    let state = db.get_full_state(&room_id).await?;
+    let state = db.get_full_state(&room_id).await?.unwrap();
     Ok(Json(state))
 }
 
@@ -364,7 +376,7 @@ pub async fn get_members(
         None => return Err(Error::Forbidden),
     }
 
-    let mut state = db.get_full_state(&room_id).await?;
+    let mut state = db.get_full_state(&room_id).await?.unwrap();
     state.retain(|event| {
         let membership: Membership = event.content.get("membership")
             .expect("no membership in m.room.member")
