@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
 use crate::{
@@ -13,17 +13,19 @@ use crate::{
     storage::{EventQuery, QueryType, UserProfile},
     util::MatrixId,
 };
+use super::Batch;
 
-#[derive(Debug)]
 struct MemStorage {
     rooms: HashMap<String, Room>,
     users: Vec<User>,
     access_tokens: HashMap<Uuid, String>,
+    batches: HashMap<String, Batch>,
 }
 
 #[derive(Debug)]
 struct Room {
     events: Vec<PduV4>,
+    notify_send: Sender<()>,
 }
 
 #[derive(Debug)]
@@ -59,6 +61,7 @@ impl MemStorageManager {
                 rooms: HashMap::new(),
                 users: Vec::new(),
                 access_tokens: HashMap::new(),
+                batches: HashMap::new(),
             })),
         }
     }
@@ -81,7 +84,7 @@ impl super::Storage for MemStorageHandle {
     type Error = Error;
 
     async fn create_user(
-        &mut self,
+        &self,
         username: &str,
         password_hash: Option<&str>,
     ) -> Result<(), Error> {
@@ -98,7 +101,7 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn verify_password(&mut self, username: &str, password: &str) -> Result<bool, Error> {
+    async fn verify_password(&self, username: &str, password: &str) -> Result<bool, Error> {
         let db = self.inner.read().await;
         let user = db.users.iter().find(|u| u.username == username);
         if let Some(user) = user {
@@ -116,7 +119,7 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn create_access_token(
-        &mut self,
+        &self,
         username: &str,
         _device_id: &str,
     ) -> Result<Uuid, Error> {
@@ -126,13 +129,13 @@ impl super::Storage for MemStorageHandle {
         Ok(token)
     }
 
-    async fn delete_access_token(&mut self, token: Uuid) -> Result<(), Error> {
+    async fn delete_access_token(&self, token: Uuid) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         db.access_tokens.remove(&token);
         Ok(())
     }
 
-    async fn delete_all_access_tokens(&mut self, token: Uuid) -> Result<(), Error> {
+    async fn delete_all_access_tokens(&self, token: Uuid) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         let username = match db.access_tokens.get(&token) {
             Some(v) => v.clone(),
@@ -142,12 +145,12 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn try_auth(&mut self, token: Uuid) -> Result<Option<String>, Error> {
+    async fn try_auth(&self, token: Uuid) -> Result<Option<String>, Error> {
         let db = self.inner.read().await;
         Ok(db.access_tokens.get(&token).cloned())
     }
 
-    async fn get_profile(&mut self, username: &str) -> Result<Option<UserProfile>, Error> {
+    async fn get_profile(&self, username: &str) -> Result<Option<UserProfile>, Error> {
         let db = self.inner.read().await;
         Ok(db
             .users
@@ -156,7 +159,7 @@ impl super::Storage for MemStorageHandle {
             .map(|u| u.profile.clone()))
     }
 
-    async fn set_avatar_url(&mut self, username: &str, avatar_url: &str) -> Result<(), Error> {
+    async fn set_avatar_url(&self, username: &str, avatar_url: &str) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         let user = db
             .users
@@ -167,7 +170,7 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn set_display_name(&mut self, username: &str, display_name: &str) -> Result<(), Error> {
+    async fn set_display_name(&self, username: &str, display_name: &str) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         let user = db
             .users
@@ -178,12 +181,14 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn add_pdus(&mut self, pdus: &[PduV4]) -> Result<(), Error> {
+    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         for pdu in pdus {
             if pdu.ty == "m.room.create" {
-                db.rooms
-                    .insert(pdu.room_id.clone(), Room { events: Vec::new() });
+                db.rooms.insert(
+                    pdu.room_id.clone(),
+                    Room { events: Vec::new(), notify_send: channel(1).0 },
+                );
             }
             db.rooms
                 .get_mut(&pdu.room_id)
@@ -194,91 +199,57 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn query_pdus(&mut self, query: EventQuery) -> Result<Option<Vec<PduV4>>, Error> {
-        let db = self.inner.read().await;
-        let EventQuery {
-            query_type,
-            room,
-            timeout_ms,
-            senders,
-            not_senders,
-            types,
-            not_types,
-            contains_json,
-        } = query;
-        let room = match db.rooms.get(&room) {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        let max = room.events.len();
-        let base_slice = match &query_type {
+    async fn query_pdus<'a>(
+        &self,
+        query: EventQuery<'a>,
+        wait: bool,
+    ) -> Result<(Vec<PduV4>, usize), Error> {
+        let mut ret = Vec::new();
+        let (mut from, mut to) = match &query.query_type {
             &QueryType::Timeline { from, to } => {
-                &room.events[from..to.unwrap_or(max)]
+                (from, to)
             },
             &QueryType::State { at, .. } => {
-                &room.events[0..at.unwrap_or(max)]
+                (0, at)
             },
         };
-        for i in 0..2usize {
-            let base_iter = base_slice
-                .iter()
-                .filter(|e| {
-                    if !senders.is_empty() {
-                        senders.contains(&e.sender)
-                    } else {
-                        true
-                    }
-                })
-                .filter(|e| !not_senders.contains(&e.sender))
-                .filter(|e| {
-                    if !types.is_empty() {
-                        types.contains(&e.ty)
-                    } else {
-                        true
-                    }
-                })
-                .filter(|e| !not_types.contains(&e.ty));
-            
-            let ret: Vec<PduV4> = match &query_type {
-                QueryType::State { state_keys, not_state_keys, .. } => {
-                    base_iter.filter(|e| if !state_keys.is_empty() {
-                        match &e.state_key {
-                            Some(k) if state_keys.contains(&k) => true,
-                            _ => false,
-                        }
-                    } else {
-                        true
-                    }).filter(|e| match &e.state_key {
-                        Some(k) if !not_state_keys.contains(&k) => false,
-                        Some(_) => true,
-                        None => false
-                    }).cloned().collect()
-                },
-                _ => base_iter.cloned().collect(),
-            };
-            log::info!("{:?}", ret);
-            if !ret.is_empty() {
-                return Ok(Some(ret));
+
+        loop {
+            let db = self.inner.read().await;
+            let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
+            if let None = to {
+                to = Some(room.events.len() - 1);
+            }
+
+            if let Some(range) = room.events.get(from..=to.unwrap()) {
+                ret.extend(
+                    range.iter()
+                    .filter(|pdu| query.matches(&pdu))
+                    .cloned());
+            }
+
+            if wait && ret.is_empty() && query.query_type.is_timeline() {
+                let mut recv = room.notify_send.subscribe();
+                // Release locks; we are about to wait for new events to come in, and they can't if we've
+                // locked the db
+                drop(db);
+                // This returns a result, but one of the possible errors is "there are multiple
+                // events" which is what we're waiting for anyway, and the other is "send half has
+                // been dropped" which would mean we have bigger problems than this one query
+                let _ = recv.recv().await;
+                from = to.unwrap();
+                to = None;
             } else {
-                if i == 0 {
-                    log::info!("waiting...");
-                    tokio::time::delay_for(
-                        std::time::Duration::from_millis(timeout_ms as u64)
-                    ).await;
-                    log::info!("waited!");
-                } else if i == 1 {
-                    break;
-                }
+                break;
             }
         }
-        return Ok(Some(Vec::new()))
-        //TODO: contains_json
+        Ok((ret, to.unwrap()))
     }
 
     async fn get_memberships_by_user(
-        &mut self,
+        &self,
         user_id: &MatrixId,
-    ) -> Result<HashMap<String, Membership>, Self::Error> {
+    ) -> Result<HashMap<String, Membership>, Error> {
         let rooms = {
             let db = self.inner.read().await;
             db.rooms.keys().cloned().collect::<Vec<_>>()
@@ -294,10 +265,10 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn get_event(
-        &mut self,
+        &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<Event>, Self::Error> {
+    ) -> Result<Option<Event>, Error> {
         let db = self.inner.read().await;
         let event = db
             .rooms
@@ -319,9 +290,9 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn get_prev_event_ids(
-        &mut self,
+        &self,
         room_id: &str,
-    ) -> Result<Option<(i64, Vec<String>)>, Self::Error> {
+    ) -> Result<Option<(i64, Vec<String>)>, Error> {
         let db = self.inner.read().await;
         let room = db.rooms.get(room_id);
         match room {
@@ -338,9 +309,9 @@ impl super::Storage for MemStorageHandle {
     }
 
     async fn get_user_account_data(
-        &mut self,
+        &self,
         username: &str,
-    ) -> Result<HashMap<String, JsonValue>, Self::Error> {
+    ) -> Result<HashMap<String, JsonValue>, Error> {
         let db = self.inner.read().await;
         let map = db
             .users
@@ -351,9 +322,22 @@ impl super::Storage for MemStorageHandle {
         Ok(map)
     }
 
-    async fn print_the_world(&mut self) -> Result<(), Error> {
+    async fn get_batch(&self, id: &str) -> Result<Option<Batch>, Error> {
         let db = self.inner.read().await;
-        log::info!("{:#?}", db);
+        Ok(db.batches.get(id).cloned())
+    }
+
+    async fn set_batch(&self, id: &str, batch: Batch) -> Result<(), Error> {
+        let mut db = self.inner.write().await;
+        let _ = db.batches.insert(String::from(id), batch);
+        Ok(())
+    }
+
+    async fn print_the_world(&self) -> Result<(), Error> {
+        let db = self.inner.read().await;
+        log::info!("{:#?}", db.rooms);
+        log::info!("{:#?}", db.users);
+        log::info!("{:#?}", db.access_tokens);
         Ok(())
     }
 }

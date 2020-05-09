@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     sync::Arc
 };
+use tokio::time::{Duration, delay_for};
 
 use crate::{
     client::{
@@ -32,7 +33,7 @@ pub struct SyncRequest {
     #[serde(default = "default_set_presence")]
     set_presence: SetPresence,
     #[serde(default)]
-    timeout: u32,
+    timeout: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,7 +56,7 @@ pub struct SyncResponse {
     account_data: AccountData,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct Rooms {
     join: HashMap<String, JoinedRoom>,
     invite: HashMap<String, InvitedRoom>,
@@ -149,108 +150,156 @@ pub async fn sync(
     token: AccessToken,
     req: Query<SyncRequest>,
 ) -> Result<Json<SyncResponse>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    let memberships = db.get_memberships_by_user(&user_id).await?;
-    let mut join = HashMap::new();
-    let mut invite = HashMap::new();
-    let mut leave = HashMap::new();
-    for (room_id, membership) in memberships {
-        match membership {
-            Membership::Join => {
-                let (joined_member_count, invited_member_count)
-                    = db.get_room_member_counts(&room_id).await?;
-                let summary = RoomSummary {
-                    heroes: None,   // TODO
-                    joined_member_count,
-                    invited_member_count,
-                };
-                let state = if req.full_state {
-                    State { events: db.get_full_state(&room_id).await?.unwrap() }
-                } else {
-                    State { events: Vec::new() }
-                };
-                let since: usize = req.since.as_deref().map(|s| {
-                    if s.len() != 0 {
-                        str::parse(s)
-                    } else {
-                        Ok(0)
-                    }
-                }).unwrap_or(Ok(0))
-                    .map_err(|e| Error::InvalidParam(format!("invalid since param: {}", e)))?;
-                let query = EventQuery {
-                    query_type: QueryType::Timeline {
-                        from: since, to: None,
-                    },
-                    room: room_id.to_string(),
-                    timeout_ms: req.timeout as usize,
-                    senders: Vec::new(),
-                    not_senders: Vec::new(),
-                    types: Vec::new(),
-                    not_types: Vec::new(),
-                    contains_json: None,
-                };
-                let events = db.query_events(query).await?.unwrap();
-                let timeline = Timeline {
-                    events,
-                    limited: false,
-                    prev_batch: String::from("placeholder_prev_batch"),
-                };
-                //TODO: implement ephemeral events and per-room account data
-                let ephemeral = Ephemeral {
-                    events: Vec::new(),
-                };
-                let account_data = AccountData {
-                    events: Vec::new(),
-                };
-                join.insert(room_id, JoinedRoom {
-                    summary,
-                    state,
-                    timeline,
-                    ephemeral,
-                    account_data,
-                });
-            },
-            Membership::Invite => {
-                let room_state = db.get_full_state(&room_id).await?.unwrap();
-                let events = room_state.into_iter().map(|event| StrippedState {
-                    content: event.content,
-                    state_key: event.state_key.unwrap(),
-                    ty: event.ty,
-                    sender: event.sender,
-                }).collect();
-                invite.insert(room_id, InvitedRoom {
-                    invite_state: InviteState {
-                        events,
-                    },
-                });
-            },
-            Membership::Leave => {},
-            Membership::Knock => {},
-            Membership::Ban => {},
-        }
-    }
-    let rooms = Rooms { join, invite, leave };
-
-    let account_data_map = db.get_user_account_data(&username).await?;
-    let mut account_data_events = Vec::new();
-    for (key, value) in account_data_map {
-        account_data_events.push(KvPair {
-            ty: key,
-            content: value,
-        });
-    }
-
-    Ok(Json(SyncResponse {
-        next_batch: String::new(),
-        rooms: Some(rooms),
+    let mut batch = db.get_batch(req.since.as_deref().unwrap_or("empty")).await?.unwrap_or_default();
+    let next_batch_id = format!("{:x}", rand::random::<u64>());
+    let mut res = SyncResponse {
+        next_batch: next_batch_id.clone(),
+        rooms: None,
         presence: None,
         account_data: AccountData {
-            events: account_data_events,
+            events: Vec::new(),
         },
-    }))
+    };
+
+    let memberships = db.get_memberships_by_user(&user_id).await?;
+    let mut something_happened = false;
+    for (room_id, membership) in memberships.iter() {
+        match membership {
+            Membership::Join => {
+                batch.invites.remove(room_id);
+                let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
+                let (events, progress) = db.query_events(EventQuery {
+                    query_type: QueryType::Timeline { from, to: None },
+                    room_id,
+                    senders: &[],
+                    not_senders: &[],
+                    types: &[],
+                    not_types: &[],
+                    contains_json: None,
+                }, false).await?;
+                batch.rooms.insert(room_id.clone(), progress + 1);
+
+                let mut state_events = Vec::new();
+                if req.full_state {
+                    state_events = db.get_full_state(&room_id).await?;
+                }
+
+                if !events.is_empty() || !state_events.is_empty() {
+                    something_happened = true;
+                    let (joined, invited) = db.get_room_member_counts(&room_id).await?;
+                    let summary = RoomSummary {
+                        heroes: None,
+                        joined_member_count: joined,
+                        invited_member_count: invited,
+                    };
+                    let state = State { events: state_events };
+                    let timeline = Timeline {
+                        events,
+                        limited: false,
+                        prev_batch: String::from("empty"),
+                    };
+                    let ephemeral = Ephemeral { events: Vec::new() };
+                    let account_data = AccountData { events: Vec::new() };
+                    res.rooms.get_or_insert_with(Default::default).join.insert(
+                        String::from(room_id),
+                        JoinedRoom {
+                            summary,
+                            state,
+                            timeline,
+                            ephemeral,
+                            account_data,
+                        },
+                    );
+                }
+            },
+            Membership::Invite if !batch.invites.contains(room_id) => {
+                let events = db.get_full_state(&room_id).await?
+                    .into_iter()
+                    .map(|e| StrippedState {
+                        content: e.content,
+                        state_key: e.state_key.unwrap(),
+                        ty: e.ty,
+                        sender: e.sender,
+                    })
+                    .collect();
+                res.rooms.get_or_insert_with(Default::default).invite.insert(
+                    room_id.clone(),
+                    InvitedRoom {
+                        invite_state: InviteState {
+                            events,
+                        },
+                    },
+                );
+                batch.invites.insert(room_id.clone());
+            }
+            _ => {},
+        }
+    }
+
+    if something_happened {
+        db.set_batch(&next_batch_id, batch).await?;
+        return Ok(Json(res));
+    }
+
+    let mut queries = Vec::new();
+    for (room_id, _) in memberships.iter().filter(|(_, m)| **m == Membership::Join) {
+        let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
+        queries.push(db.query_events(EventQuery {
+            query_type: QueryType::Timeline {
+                from, to: None,
+            },
+            room_id,
+            senders: &[],
+            not_senders: &[],
+            types: &[],
+            not_types: &[],
+            contains_json: None,
+        }, true));
+    }
+    if queries.is_empty() {
+        // user is not in any rooms. no point waiting for stuff to happen in them
+        db.set_batch(&next_batch_id, batch).await?;
+        return Ok(Json(res));
+    }
+
+    let timeout = delay_for(Duration::from_millis(req.timeout));
+    tokio::select! {
+        _ = timeout => {
+            db.set_batch(&next_batch_id, batch).await?;
+            return Ok(Json(res));
+        },
+        (query_res, _, _) = futures::future::select_all(queries) => {
+            let (events, progress) = query_res?;
+            let room_id = events[0].room_id.clone().unwrap();
+            let (joined, invited) = db.get_room_member_counts(&room_id).await?;
+            let summary = RoomSummary {
+                heroes: None,
+                joined_member_count: joined,
+                invited_member_count: invited,
+            };
+            batch.rooms.insert(room_id.clone(), progress + 1);
+            res.rooms.get_or_insert_with(Default::default).join.insert(
+                room_id,
+                JoinedRoom {
+                    summary,
+                    timeline: Timeline {
+                        events,
+                        limited: false,
+                        prev_batch: String::from("empty"),
+                    },
+                    state: State { events: Vec::new() },
+                    ephemeral: Ephemeral { events: Vec::new() },
+                    account_data: AccountData { events: Vec::new() },
+                }
+            );
+            db.set_batch(&next_batch_id, batch).await?;
+            return Ok(Json(res));
+        },
+    };
 }
 
 #[get("/rooms/{room_id}/event/{event_id}")]
@@ -260,7 +309,7 @@ pub async fn get_event(
     path_args: Path<(String, String)>,
 ) -> Result<Json<Event>, Error> {
     let (room_id, event_id) = path_args.into_inner();
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -301,7 +350,7 @@ pub async fn get_state_event_inner(
     token: AccessToken,
     (room_id, event_type, state_key): (String, String, String),
 ) -> Result<Json<Event>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -325,7 +374,7 @@ pub async fn get_state(
     room_id: Path<String>,
 ) -> Result<Json<Vec<Event>>, Error> {
     let room_id = room_id.into_inner();
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -338,7 +387,7 @@ pub async fn get_state(
         None => return Err(Error::Forbidden),
     }
 
-    let state = db.get_full_state(&room_id).await?.unwrap();
+    let state = db.get_full_state(&room_id).await?;
     Ok(Json(state))
 }
 
@@ -363,7 +412,7 @@ pub async fn get_members(
     room_id: Path<String>,
     req: Query<MembersRequest>,
 ) -> Result<Json<MembersResponse>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     
@@ -376,7 +425,7 @@ pub async fn get_members(
         None => return Err(Error::Forbidden),
     }
 
-    let mut state = db.get_full_state(&room_id).await?.unwrap();
+    let mut state = db.get_full_state(&room_id).await?;
     state.retain(|event| {
         let membership: Membership = event.content.get("membership")
             .expect("no membership in m.room.member")

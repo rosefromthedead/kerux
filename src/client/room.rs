@@ -73,7 +73,7 @@ pub async fn create_room(
     req: Json<CreateRoomRequest>,
 ) -> Result<Json<JsonValue>, Error> {
     let req = req.into_inner();
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 

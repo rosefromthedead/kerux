@@ -26,7 +26,7 @@ pub async fn get_avatar_url(
         return Err(Error::Unimplemented);
     }
 
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let avatar_url = match db.get_profile(&user_id.localpart()).await?.unwrap().avatar_url {
         Some(v) => v,
         None => return Err(Error::NotFound),
@@ -44,7 +44,7 @@ pub async fn set_avatar_url(
     req_id: Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     if *req_id.localpart() != username {
         return Err(Error::Forbidden);
@@ -71,7 +71,7 @@ pub async fn get_display_name(
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let displayname = match db.get_profile(&user_id.localpart()).await?.unwrap().displayname {
         Some(v) => v,
         None => return Err(Error::NotFound),
@@ -89,7 +89,7 @@ pub async fn set_display_name(
     req_id: Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     if *req_id.domain() != username {
         return Err(Error::Forbidden);
@@ -116,7 +116,7 @@ pub async fn get_profile(
         return Err(Error::Unimplemented);
     }
 
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let UserProfile { avatar_url, displayname } = db.get_profile(&user_id.localpart()).await?.unwrap();
     let mut response = serde_json::Map::new();
     if let Some(v) = avatar_url {
@@ -158,7 +158,7 @@ pub async fn search_user_directory(
     req: Json<UserDirSearchRequest>,
 ) -> Result<Json<UserDirSearchResponse>, Error> {
     let req = req.into_inner();
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let searched_user = MatrixId::new(&req.search_term, &state.config.domain)
         .map_err(|e| Error::Unknown(e.to_string()))?;
     let user_profile = db.get_profile(searched_user.localpart()).await?;
