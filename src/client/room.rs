@@ -326,7 +326,7 @@ pub async fn invite(
     let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
 
     let invite_event = Event {
-        room_id: None,
+        room_id: Some(room_id.into_inner()),
         sender: user_id.clone(),
         ty: "m.room.member".to_string(),
         state_key: Some(invitee.clone_inner()),
@@ -342,7 +342,7 @@ pub async fn invite(
         origin_server_ts: None,
     };
 
-    db.add_event(invite_event, &room_id).await?;
+    db.add_event(invite_event).await?;
 
     Ok(Json(()))
 }
@@ -360,7 +360,7 @@ pub async fn join_by_id_or_alias(
     let profile = db.get_profile(&username).await?.unwrap_or_default();
 
     let event = Event {
-        room_id: None,
+        room_id: Some(room_id_or_alias.clone()),   //TODO: what even is an alias
         sender: user_id.clone(),
         ty: "m.room.member".to_string(),
         state_key: Some(user_id.to_string()),
@@ -376,7 +376,7 @@ pub async fn join_by_id_or_alias(
         origin_server_ts: None,
     };
 
-    db.add_event(event, &room_id_or_alias).await?;
+    db.add_event(event).await?;
 
     Ok(Json(serde_json::json!({
         "room_id": *room_id_or_alias
