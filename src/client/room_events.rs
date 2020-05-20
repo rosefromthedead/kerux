@@ -459,7 +459,7 @@ pub async fn send_state_event(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
-        room_id: None,
+        room_id: Some(room_id),
         sender: user_id,
         ty: event_type,
         state_key: Some(state_key),
@@ -470,7 +470,7 @@ pub async fn send_state_event(
         origin_server_ts: None,
     };
 
-    let event_id = db.add_event(event, &room_id).await?;
+    let event_id = db.add_event(event).await?;
 
     Ok(Json(SendEventResponse {
         event_id,
@@ -490,7 +490,7 @@ pub async fn send_event(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
-        room_id: None,
+        room_id: Some(room_id),
         sender: user_id,
         ty: event_type,
         state_key: None,
@@ -501,7 +501,7 @@ pub async fn send_event(
         origin_server_ts: None,
     };
 
-    let event_id = db.add_event(event, &room_id).await?;
+    let event_id = db.add_event(event).await?;
 
     Ok(Json(SendEventResponse {
         event_id,

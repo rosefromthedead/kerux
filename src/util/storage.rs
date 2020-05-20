@@ -3,7 +3,7 @@ use displaydoc::Display;
 use std::convert::TryInto;
 
 use crate::{
-    events::{Event, UnhashedPdu, room},
+    events::{Event, room},
     storage::{Storage, StorageManager},
     util::MxidError,
 };
@@ -46,7 +46,6 @@ pub trait StorageExt {
     async fn add_event(
         &mut self,
         event: Event,
-        room_id: &str,
     ) -> Result<String, AddEventError>;
 
     async fn create_test_users(&mut self) -> Result<(), DbError>;
@@ -57,8 +56,8 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
     async fn add_event(
         &mut self,
         event: Event,
-        room_id: &str,
     ) -> Result<String, AddEventError> {
+        let room_id = event.room_id.as_ref().unwrap();
         let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
             Some(v) => {
                 (serde_json::from_value(v.content).map_err(AddEventError::InvalidPowerLevels)?,
@@ -93,30 +92,12 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
             },
         }
 
-        let now = chrono::Utc::now().timestamp_millis();
-        let (depth, prev_events) = self.get_prev_event_ids(room_id).await?
-            .ok_or(AddEventError::RoomNotFound)?;
-        let auth_events: Vec<String> = match pl_event_id {
-            Some(v) => vec![v],
-            None => vec![],
+        let mut auth_events = Vec::with_capacity(1);
+        match pl_event_id {
+            Some(v) => auth_events.push(v),
+            None => {},
         };
-        let pdu = UnhashedPdu {
-            room_id: room_id.to_string(),
-            sender: event.sender.clone(),
-            ty: event.ty,
-            state_key: event.state_key,
-            content: event.content,
-            unsigned: event.unsigned,
-            redacts: event.redacts,
-            origin: event.sender.domain().to_string(),
-            origin_server_ts: now,
-            prev_events,
-            depth: depth + 1,
-            auth_events: auth_events.clone(),
-        }.finalize();
-        let event_id = pdu.hashes.sha256.clone();
-
-        self.add_pdus(&[pdu]).await?;
+        let event_id = self.add_event_unchecked(event, auth_events).await?;
         Ok(event_id)
     }
 

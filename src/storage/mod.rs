@@ -185,6 +185,20 @@ pub trait Storage: Send + Sync {
 
     async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Self::Error>;
 
+    /// Adds the given event to the head of the room, *without* checking any of the following:
+    /// * whether the event's contents are valid
+    /// * whether the sender is allowed to send this event in this context
+    /// * whether the given auth_events do actually authorise the event
+    /// * whether the given auth_events exist
+    ///
+    /// This means they **must** be checked before calling. Typically, this is done by
+    /// `util::storage::StorageExt::add_event`.
+    async fn add_event_unchecked(
+        &self,
+        event: Event,
+        auth_events: Vec<String>,
+    ) -> Result<String, Self::Error>;
+
     async fn query_pdus<'a>(
         &self,
         query: EventQuery<'a>,
@@ -311,11 +325,6 @@ pub trait Storage: Send + Sync {
         room_id: &str,
         event_id: &str,
     ) -> Result<Option<Event>, Self::Error>;
-
-    async fn get_prev_event_ids(
-        &self,
-        room_id: &str,
-    ) -> Result<Option<(i64, Vec<String>)>, Self::Error>;
 
     async fn get_user_account_data(
         &self,

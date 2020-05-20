@@ -9,7 +9,8 @@ use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
 use crate::{
-    events::{room::Membership, Event, PduV4},
+    client::error::Error as ClientApiError,
+    events::{room::Membership, Event, PduV4, UnhashedPdu},
     storage::{EventQuery, QueryType, UserProfile},
     util::MatrixId,
 };
@@ -199,6 +200,47 @@ impl super::Storage for MemStorageHandle {
         Ok(())
     }
 
+    async fn add_event_unchecked(&self, event: Event, auth_events: Vec<String>) -> Result<String, Error> {
+        let mut db = self.inner.write().await;
+        let room_id = event.room_id.as_ref().unwrap();
+        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        let depth = room.events.iter().map(|pdu| pdu.depth).max().unwrap();
+        let prev_events = room.events.iter()
+            .filter(|pdu| pdu.depth == depth)
+            .map(|pdu| String::from(&pdu.hashes.sha256))
+            .collect::<Vec<_>>();
+        let Event {
+            room_id,
+            sender,
+            ty,
+            state_key,
+            content,
+            unsigned,
+            redacts,
+            event_id: _,
+            origin_server_ts: _,
+        } = event;
+        let origin = String::from(sender.domain());
+        let origin_server_ts = chrono::Utc::now().timestamp_millis();
+        let pdu = UnhashedPdu {
+            room_id: room_id.unwrap(),
+            sender,
+            ty,
+            state_key,
+            content,
+            unsigned,
+            redacts,
+            origin,
+            origin_server_ts,
+            prev_events,
+            depth: depth + 1,
+            auth_events,
+        }.finalize();
+        let event_id = pdu.hashes.sha256.clone();
+        room.events.push(pdu);
+        Ok(event_id)
+    }
+
     async fn query_pdus<'a>(
         &self,
         query: EventQuery<'a>,
@@ -287,25 +329,6 @@ impl super::Storage for MemStorageHandle {
                 origin_server_ts: Some(event.origin_server_ts),
             });
         Ok(event)
-    }
-
-    async fn get_prev_event_ids(
-        &self,
-        room_id: &str,
-    ) -> Result<Option<(i64, Vec<String>)>, Error> {
-        let db = self.inner.read().await;
-        let room = db.rooms.get(room_id);
-        match room {
-            Some(r) => {
-                let depth = r.events.get(r.events.len() - 1).unwrap().depth;
-                let mut prev_event_ids = Vec::new();
-                for event in r.events.iter().filter(|e| e.depth == depth) {
-                    prev_event_ids.push(event.hashes.sha256.clone());
-                }
-                return Ok(Some((depth, prev_event_ids)));
-            }
-            None => return Ok(None),
-        }
     }
 
     async fn get_user_account_data(
