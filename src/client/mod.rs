@@ -44,7 +44,16 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(room_events::get_state)
         .service(room_events::get_members)
         .service(room_events::send_state_event)
-        .service(room_events::send_event);
+        .service(room_events::send_event)
+        
+        .wrap(actix_cors::Cors::new()
+            .send_wildcard()
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+            .allowed_headers(
+                vec!["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
+            )
+            .finish()
+        );
 
     cfg.service(r0);
 }

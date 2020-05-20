@@ -5,6 +5,7 @@ authors = ["Tommy Hudson <thomhuds@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
+actix-cors = "0.2.0"
 actix-rt = "1.0.0"
 actix-web = "2.0.0"
 async-trait = "0.1.22"
