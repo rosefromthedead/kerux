@@ -13,7 +13,10 @@ use std::{
     string::FromUtf8Error,
 };
 
-use crate::{storage::StorageManager, util::storage::AddEventError};
+use crate::{
+    storage::{mem::Error as MemStorageError, StorageManager},
+    util::storage::AddEventError
+};
 
 type DbError = <crate::StorageManager as StorageManager>::Error;
 
@@ -189,9 +192,12 @@ impl From<IoError> for Error {
     }
 }
 
-impl From<DbError> for Error {
-    fn from(e: DbError) -> Self {
-        Error::DbError(e)
+impl From<MemStorageError> for Error {
+    fn from(e: MemStorageError) -> Error {
+        match e {
+            MemStorageError::UserNotFound => Error::NotFound,
+            MemStorageError::RoomNotFound => Error::NotFound,
+        }
     }
 }
 
@@ -204,7 +210,7 @@ impl From<argon2::Error> for Error {
 impl From<AddEventError> for Error {
     fn from(e: AddEventError) -> Self {
         match e {
-            AddEventError::DbError(e) => Error::DbError(e),
+            AddEventError::DbError(e) => Error::from(e),
             _ => Error::AddEventError(e),
         }
     }
