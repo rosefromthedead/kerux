@@ -6,6 +6,7 @@ runtime.
 More information:
  - [Design Choices](./design_choices.md)
  - [Project Timeline](./timeline.md)
+ - [Development Process](./dev_process.md)
 
 ## Motivation
 I needed something to do, and I love Rust. When I started this project, the existing matrix servers

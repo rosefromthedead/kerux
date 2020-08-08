@@ -13,7 +13,8 @@ Cons:
 
 Overall, the speed of Rust makes it suitable for a project like this, aiming to be an alternative
 to Synapse which has received criticism for being too slow. Also, the enforced correctness makes it
-easier to track things like incomplete or incorrect code.
+easier to track things like incomplete or incorrect code (for example, warnings about unnecessary
+`mut`s often highlight unimplemented sections).
 
 ## Actix
 Pros:
