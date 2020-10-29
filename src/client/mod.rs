@@ -2,6 +2,7 @@ use actix_web::{get, web::{self, Json}};
 use serde_json::json;
 
 mod auth;
+mod ephemeral;
 pub mod error;
 mod room;
 mod room_events;
@@ -45,6 +46,8 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(room_events::get_members)
         .service(room_events::send_state_event)
         .service(room_events::send_event)
+
+        .service(ephemeral::typing)
         
         .wrap(actix_cors::Cors::new()
             .send_wildcard()

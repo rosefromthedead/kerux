@@ -5,6 +5,7 @@ use serde_json::{Map, Value as JsonValue};
 
 use crate::util::MatrixId;
 
+pub mod ephemeral;
 pub mod room;
 
 #[derive(Debug, Serialize)]
