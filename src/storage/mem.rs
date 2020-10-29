@@ -3,14 +3,14 @@ use displaydoc::Display;
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::Arc, time::{Duration, Instant},
 };
 use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
 use crate::{
     client::error::Error as ClientApiError,
-    events::{room::Membership, Event, PduV4, UnhashedPdu},
+    events::{ephemeral::Typing, room::Membership, Event, PduV4, UnhashedPdu},
     storage::{EventQuery, QueryType, UserProfile},
     util::MatrixId,
 };
@@ -26,6 +26,8 @@ struct MemStorage {
 #[derive(Debug)]
 struct Room {
     events: Vec<PduV4>,
+    ephemeral: HashMap<String, JsonValue>,
+    typing: HashMap<MatrixId, Instant>,
     notify_send: Sender<()>,
 }
 
@@ -51,6 +53,17 @@ pub enum Error {
     UserNotFound,
     /// The specified room was not found.
     RoomNotFound,
+}
+
+impl Room {
+    fn new() -> Self {
+        Room {
+            events: Vec::new(),
+            ephemeral: HashMap::new(),
+            typing: Default::default(),
+            notify_send: channel(1).0,
+        }
+    }
 }
 
 impl std::error::Error for Error {}
@@ -188,7 +201,7 @@ impl super::Storage for MemStorageHandle {
             if pdu.ty == "m.room.create" {
                 db.rooms.insert(
                     pdu.room_id.clone(),
-                    Room { events: Vec::new(), notify_send: channel(1).0 },
+                    Room::new(),
                 );
             }
             db.rooms
@@ -238,6 +251,7 @@ impl super::Storage for MemStorageHandle {
         }.finalize();
         let event_id = pdu.hashes.sha256.clone();
         room.events.push(pdu);
+        let _ = room.notify_send.send(());
         Ok(event_id)
     }
 
@@ -256,34 +270,46 @@ impl super::Storage for MemStorageHandle {
             },
         };
 
-        loop {
-            let db = self.inner.read().await;
-            let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
-            if let None = to {
-                to = Some(room.events.len() - 1);
-            }
+        let db = self.inner.read().await;
+        let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
+        if let None = to {
+            to = Some(room.events.len() - 1);
+        }
 
-            if let Some(range) = room.events.get(from..=to.unwrap()) {
-                ret.extend(
-                    range.iter()
-                    .filter(|pdu| query.matches(&pdu))
-                    .cloned());
-            }
+        if let Some(range) = room.events.get(from..=to.unwrap()) {
+            ret.extend(
+                range.iter()
+                .filter(|pdu| query.matches(&pdu))
+                .cloned());
+        }
+            
+        if wait && ret.is_empty() && query.query_type.is_timeline() {
+            let mut recv = room.notify_send.subscribe();
+            // Release locks; we are about to wait for new events to come in, and they can't if we've
+            // locked the db
+            drop(db);
+            // This returns a result, but one of the possible errors is "there are multiple
+            // events" which is what we're waiting for anyway, and the other is "send half has
+            // been dropped" which would mean we have bigger problems than this one query
+            let _ = recv.recv().await;
+            from = to.unwrap();
+            to = None;
+        } else {
+            return Ok((ret, to.unwrap()));
+        }
 
-            if wait && ret.is_empty() && query.query_type.is_timeline() {
-                let mut recv = room.notify_send.subscribe();
-                // Release locks; we are about to wait for new events to come in, and they can't if we've
-                // locked the db
-                drop(db);
-                // This returns a result, but one of the possible errors is "there are multiple
-                // events" which is what we're waiting for anyway, and the other is "send half has
-                // been dropped" which would mean we have bigger problems than this one query
-                let _ = recv.recv().await;
-                from = to.unwrap();
-                to = None;
-            } else {
-                break;
-            }
+        // same again
+        let db = self.inner.read().await;
+        let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
+        if let None = to {
+            to = Some(room.events.len() - 1);
+        }
+
+        if let Some(range) = room.events.get(from..=to.unwrap()) {
+            ret.extend(
+                range.iter()
+                .filter(|pdu| query.matches(&pdu))
+                .cloned());
         }
         Ok((ret, to.unwrap()))
     }
@@ -329,6 +355,78 @@ impl super::Storage for MemStorageHandle {
                 origin_server_ts: Some(event.origin_server_ts),
             });
         Ok(event)
+    }
+
+    async fn get_all_ephemeral(
+        &self,
+        room_id: &str,
+    ) -> Result<HashMap<String, JsonValue>, Self::Error> {
+        let db = self.inner.read().await;
+        let room = db.rooms.get(room_id).ok_or(Error::RoomNotFound)?;
+        let mut ephemeral = room.ephemeral.clone();
+        
+        let now = Instant::now();
+        let mut typing = Typing::default();
+        for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout < now) {
+            typing.user_ids.insert(mxid.clone());
+        }
+        ephemeral.insert(String::from("m.typing"), serde_json::to_value(typing).unwrap());
+        dbg!(&ephemeral);
+        Ok(ephemeral)
+    }
+
+    async fn get_ephemeral(
+        &self,
+        room_id: &str,
+        event_type: &str,
+    ) -> Result<Option<JsonValue>, Error> {
+        let db = self.inner.read().await;
+        let room = db.rooms.get(room_id).ok_or(Error::RoomNotFound)?;
+        if event_type == "m.typing" {
+            let now = Instant::now();
+            let mut ret = Typing::default();
+            for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout > now) {
+                ret.user_ids.insert(mxid.clone());
+            }
+            return Ok(Some(serde_json::to_value(ret).unwrap()))
+        }
+        Ok(room.ephemeral.get(event_type).cloned())
+    }
+
+    async fn set_ephemeral(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        content: Option<JsonValue>,
+    ) -> Result<(), Self::Error> {
+        assert!(event_type != "m.typing", "m.typing should not be set directly");
+        let mut db = self.inner.write().await;
+        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        match content {
+            Some(c) => room.ephemeral.insert(String::from(event_type), c),
+            None => room.ephemeral.remove(event_type),
+        };
+        let _ = room.notify_send.send(());
+        Ok(())
+    }
+
+    async fn set_typing(
+        &self,
+        room_id: &str,
+        user_id: &MatrixId,
+        is_typing: bool,
+        timeout: u32,
+    ) -> Result<(), Self::Error> {
+        let mut db = self.inner.write().await;
+        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        if is_typing {
+            room.typing.insert(user_id.clone(), Instant::now() + Duration::from_millis(timeout as u64));
+        } else {
+            room.typing.remove(user_id);
+        }
+        let _ = room.notify_send.send(());
+        
+        Ok(())
     }
 
     async fn get_user_account_data(

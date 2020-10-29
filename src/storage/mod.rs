@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     events::{
+        ephemeral::Typing,
         room::{Member, Membership},
         Event, PduV4,
     },
@@ -325,6 +326,32 @@ pub trait Storage: Send + Sync {
         room_id: &str,
         event_id: &str,
     ) -> Result<Option<Event>, Self::Error>;
+
+    async fn get_all_ephemeral(
+        &self,
+        room_id: &str,
+    ) -> Result<HashMap<String, JsonValue>, Self::Error>;
+
+    async fn get_ephemeral(
+        &self,
+        room_id: &str,
+        event_type: &str,
+    ) -> Result<Option<JsonValue>, Self::Error>;
+
+    async fn set_ephemeral(
+        &self,
+        room_id: &str,
+        event_type: &str,
+        content: Option<JsonValue>,
+    ) -> Result<(), Self::Error>;
+
+    async fn set_typing(
+        &self,
+        room_id: &str,
+        user_id: &MatrixId,
+        is_typing: bool,
+        timeout: u32,
+    ) -> Result<(), Self::Error>;
 
     async fn get_user_account_data(
         &self,

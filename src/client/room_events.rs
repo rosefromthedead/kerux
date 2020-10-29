@@ -1,4 +1,5 @@
 use actix_web::{get, put, web::{Data, Json, Path, Query}};
+use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
@@ -33,7 +34,7 @@ pub struct SyncRequest {
     #[serde(default = "default_set_presence")]
     set_presence: SetPresence,
     #[serde(default)]
-    timeout: u64,
+    timeout: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,7 +203,13 @@ pub async fn sync(
                         limited: false,
                         prev_batch: String::from("empty"),
                     };
-                    let ephemeral = Ephemeral { events: Vec::new() };
+                    let ephemeral = Ephemeral {
+                        events: db.get_all_ephemeral(room_id).await?.into_iter().map(
+                            |(k, v)| KvPair {
+                                ty: k,
+                                content: v,
+                            }).collect()
+                    };
                     let account_data = AccountData { events: Vec::new() };
                     res.rooms.get_or_insert_with(Default::default).join.insert(
                         String::from(room_id),
@@ -248,6 +255,7 @@ pub async fn sync(
     let mut queries = Vec::new();
     for (room_id, _) in memberships.iter().filter(|(_, m)| **m == Membership::Join) {
         let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
+        let room_id_clone = String::from(room_id);
         queries.push(db.query_events(EventQuery {
             query_type: QueryType::Timeline {
                 from, to: None,
@@ -258,7 +266,7 @@ pub async fn sync(
             types: &[],
             not_types: &[],
             contains_json: None,
-        }, true));
+        }, true).map(move |r| (r, room_id_clone)));
     }
     if queries.is_empty() {
         // user is not in any rooms. no point waiting for stuff to happen in them
@@ -266,15 +274,14 @@ pub async fn sync(
         return Ok(Json(res));
     }
 
-    let timeout = delay_for(Duration::from_millis(req.timeout));
+    let timeout = delay_for(Duration::from_millis(req.timeout as _));
     tokio::select! {
         _ = timeout => {
             db.set_batch(&next_batch_id, batch).await?;
             return Ok(Json(res));
         },
-        (query_res, _, _) = futures::future::select_all(queries) => {
+        ((query_res, room_id), _, _) = futures::future::select_all(queries) => {
             let (events, progress) = query_res?;
-            let room_id = events[0].room_id.clone().unwrap();
             let (joined, invited) = db.get_room_member_counts(&room_id).await?;
             let summary = RoomSummary {
                 heroes: None,
@@ -283,7 +290,7 @@ pub async fn sync(
             };
             batch.rooms.insert(room_id.clone(), progress + 1);
             res.rooms.get_or_insert_with(Default::default).join.insert(
-                room_id,
+                room_id.clone(),
                 JoinedRoom {
                     summary,
                     timeline: Timeline {
@@ -292,7 +299,13 @@ pub async fn sync(
                         prev_batch: String::from("empty"),
                     },
                     state: State { events: Vec::new() },
-                    ephemeral: Ephemeral { events: Vec::new() },
+                    ephemeral: Ephemeral {
+                        events: db.get_all_ephemeral(&room_id).await?.into_iter().map(
+                            |(k, v)| KvPair {
+                                ty: k,
+                                content: v,
+                            }).collect()
+                    },
                     account_data: AccountData { events: Vec::new() },
                 }
             );
