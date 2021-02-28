@@ -1,6 +1,6 @@
 use actix_web::{post, web::{Data, Json, Path}};
 use serde::Deserialize;
-use serde_json::{Value as JsonValue, json, to_value};
+use serde_json::{Value as JsonValue, json};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -12,7 +12,7 @@ use crate::{
         error::Error,
     },
     events::{
-        room, Event, UnhashedPdu,
+        room, Event, EventContent, UnhashedPdu,
     },
     storage::{Storage, StorageManager, UserProfile},
     util::{MatrixId, StorageExt},
@@ -87,50 +87,45 @@ pub async fn create_room(
     let mut events = Vec::new();
     let now = chrono::Utc::now().timestamp_millis();
 
-    let room_create = {
-        let extra = match req.creation_content {
+    let room_create = room::Create {
+        creator: user_id.clone(),
+        room_version: Some(room_version),
+        predecessor: None,
+        extra: match req.creation_content {
             Some(v) => v,
             None => HashMap::new(),
-        };
-        to_value(&room::Create {
-            creator: user_id.clone(),
-            room_version: Some(room_version),
-            predecessor: None,
-            extra,
-        }).unwrap()
+        },
     };
     let room_create_event = UnhashedPdu {
+        event_content: EventContent::Create(room_create),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.create".to_string(),
         state_key: Some(String::new()),
-        content: room_create,
         prev_events: Vec::new(),
         depth: 0,
         auth_events: Vec::new(),
         redacts: None,
         unsigned: None,
     }.finalize();
-    
+
     let creator_join = {
         let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
-        to_value(&room::Member {
+        room::Member {
             avatar_url,
             displayname,
             membership: room::Membership::Join,
             is_direct,
-        }).unwrap()
+        }
     };
     let creator_join_event = UnhashedPdu {
+        event_content: EventContent::Member(creator_join),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.member".to_string(),
         state_key: Some(user_id.clone_inner()),
-        content: creator_join,
         prev_events: vec![room_create_event.hashes.sha256.clone()],
         depth: 1,
         auth_events: Vec::new(),
@@ -139,13 +134,13 @@ pub async fn create_room(
     }.finalize();
 
     let power_levels_event = UnhashedPdu {
+        event_content: EventContent::PowerLevels(
+            req.power_level_content_override.unwrap_or_default()),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.power_levels".to_string(),
         state_key: Some(String::new()),
-        content: to_value(&req.power_level_content_override.unwrap_or_default()).unwrap(),
         prev_events: vec![creator_join_event.hashes.sha256.clone()],
         depth: 2,
         auth_events: Vec::new(),
@@ -166,13 +161,12 @@ pub async fn create_room(
         }
     };
     let join_rules_event = UnhashedPdu {
+        event_content: EventContent::JoinRules(room::JoinRules { join_rule }),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.join_rules".to_string(),
         state_key: Some(String::new()),
-        content: to_value(&room::JoinRules { join_rule }).unwrap(),
         prev_events: vec![power_levels_event_hash.clone()],
         depth: 3,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -180,13 +174,14 @@ pub async fn create_room(
         unsigned: None,
     }.finalize();
     let history_visibility_event = UnhashedPdu {
+        event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
+            history_visibility
+        }),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.history_visibility".to_string(),
         state_key: Some(String::new()),
-        content: to_value(&room::HistoryVisibility { history_visibility }).unwrap(),
         prev_events: vec![join_rules_event.hashes.sha256.clone()],
         depth: 4,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -194,13 +189,12 @@ pub async fn create_room(
         unsigned: None,
     }.finalize();
     let guest_access_event = UnhashedPdu {
+        event_content: EventContent::GuestAccess(room::GuestAccess { guest_access }),
         room_id: room_id.clone(),
         sender: user_id.clone(),
         origin: state.config.domain.clone(),
         origin_server_ts: now,
-        ty: "m.room.guest_access".to_string(),
         state_key: Some(String::new()),
-        content: to_value(&room::GuestAccess { guest_access }).unwrap(),
         prev_events: vec![history_visibility_event.hashes.sha256.clone()],
         depth: 5,
         auth_events: vec![power_levels_event_hash.clone()],
@@ -219,13 +213,12 @@ pub async fn create_room(
         let depth = events.len();
         events.push(
             UnhashedPdu {
+                event_content: EventContent::new(&event.ty, event.content)?,
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: state.config.domain.clone(),
                 origin_server_ts: now,
-                ty: event.ty,
                 state_key: Some(event.state_key),
-                content: event.content,
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -239,13 +232,12 @@ pub async fn create_room(
         let depth = events.len();
         events.push(
             UnhashedPdu {
+                event_content: EventContent::Name(room::Name { name }),
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: state.config.domain.clone(),
                 origin_server_ts: now,
-                ty: "m.room.name".to_string(),
                 state_key: Some(String::new()),
-                content: to_value(&room::Name { name }).unwrap(),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -259,13 +251,12 @@ pub async fn create_room(
         let depth = events.len();
         events.push(
             UnhashedPdu {
+                event_content: EventContent::Topic(room::Topic { topic }),
                 room_id: room_id.clone(),
                 sender: user_id.clone(),
                 origin: state.config.domain.clone(),
                 origin_server_ts: now,
-                ty: "m.room.topic".to_string(),
                 state_key: Some(String::new()),
-                content: to_value(&room::Topic { topic }).unwrap(),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -279,18 +270,17 @@ pub async fn create_room(
         let depth = events.len();
         events.push(
             UnhashedPdu {
-                room_id: room_id.clone(),
-                sender: user_id.clone(),
-                origin: state.config.domain.clone(),
-                origin_server_ts: now,
-                ty: "m.room.member".to_string(),
-                state_key: Some(invitee),
-                content: to_value(&room::Member {
+                event_content: EventContent::Member(room::Member {
                     avatar_url: None,
                     displayname: None,
                     membership: room::Membership::Invite,
                     is_direct,
-                }).unwrap(),
+                }),
+                room_id: room_id.clone(),
+                sender: user_id.clone(),
+                origin: state.config.domain.clone(),
+                origin_server_ts: now,
+                state_key: Some(invitee),
                 prev_events: vec![events[depth - 1].hashes.sha256.clone()],
                 depth: depth as i64,
                 auth_events: vec![power_levels_event_hash.clone()],
@@ -326,16 +316,15 @@ pub async fn invite(
     let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
 
     let invite_event = Event {
-        room_id: Some(room_id.into_inner()),
-        sender: user_id.clone(),
-        ty: "m.room.member".to_string(),
-        state_key: Some(invitee.clone_inner()),
-        content: to_value(&room::Member {
+        event_content: EventContent::Member(room::Member {
             avatar_url: invitee_profile.avatar_url,
             displayname: invitee_profile.displayname,
             membership: room::Membership::Invite,
             is_direct: false,
-        }).unwrap(),
+        }),
+        sender: user_id.clone(),
+        room_id: Some(room_id.into_inner()),
+        state_key: Some(invitee.clone_inner()),
         unsigned: None,
         redacts: None,
         event_id: None,
@@ -360,16 +349,15 @@ pub async fn join_by_id_or_alias(
     let profile = db.get_profile(&username).await?.unwrap_or_default();
 
     let event = Event {
-        room_id: Some(room_id_or_alias.clone()),   //TODO: what even is an alias
-        sender: user_id.clone(),
-        ty: "m.room.member".to_string(),
-        state_key: Some(user_id.to_string()),
-        content: to_value(&room::Member {
+        event_content: EventContent::Member(room::Member {
             avatar_url: profile.avatar_url,
             displayname: profile.displayname,
             membership: room::Membership::Join,
             is_direct: false,
-        }).unwrap(),
+        }),
+        room_id: Some(room_id_or_alias.clone()),   //TODO: what even is an alias
+        sender: user_id.clone(),
+        state_key: Some(user_id.to_string()),
         unsigned: None,
         redacts: None,
         event_id: None,

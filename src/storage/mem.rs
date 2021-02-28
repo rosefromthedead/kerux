@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     client::error::Error as ClientApiError,
-    events::{ephemeral::Typing, room::Membership, Event, PduV4, UnhashedPdu},
+    events::{ephemeral::Typing, room::Membership, Event, EventContent, PduV4, UnhashedPdu},
     storage::{EventQuery, QueryType, UserProfile},
     util::MatrixId,
 };
@@ -198,11 +198,14 @@ impl super::Storage for MemStorageHandle {
     async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         for pdu in pdus {
-            if pdu.ty == "m.room.create" {
-                db.rooms.insert(
-                    pdu.room_id.clone(),
-                    Room::new(),
-                );
+            match pdu.event_content {
+                EventContent::Create(_) => {
+                    db.rooms.insert(
+                        pdu.room_id.clone(),
+                        Room::new(),
+                    );
+                }
+                _ => {},
             }
             db.rooms
                 .get_mut(&pdu.room_id)
@@ -223,11 +226,10 @@ impl super::Storage for MemStorageHandle {
             .map(|pdu| String::from(&pdu.hashes.sha256))
             .collect::<Vec<_>>();
         let Event {
+            event_content,
             room_id,
             sender,
-            ty,
             state_key,
-            content,
             unsigned,
             redacts,
             event_id: _,
@@ -236,11 +238,10 @@ impl super::Storage for MemStorageHandle {
         let origin = String::from(sender.domain());
         let origin_server_ts = chrono::Utc::now().timestamp_millis();
         let pdu = UnhashedPdu {
+            event_content,
             room_id: room_id.unwrap(),
             sender,
-            ty,
             state_key,
-            content,
             unsigned,
             redacts,
             origin,
@@ -344,11 +345,10 @@ impl super::Storage for MemStorageHandle {
             .map(|r| r.events.iter().find(|e| e.hashes.sha256 == event_id))
             .flatten()
             .map(|event| Event {
+                event_content: event.event_content.clone(),
                 room_id: None,
                 sender: event.sender.clone(),
-                ty: event.ty.clone(),
                 state_key: event.state_key.clone(),
-                content: event.content.clone(),
                 unsigned: event.unsigned.clone(),
                 redacts: event.redacts.clone(),
                 event_id: Some(event.hashes.sha256.clone()),
