@@ -14,7 +14,7 @@ use crate::{
         error::Error,
     },
     events::{
-        Event,
+        Event, EventContent,
         room::Membership,
     },
     storage::{EventQuery, Storage, StorageManager, QueryType},
@@ -472,11 +472,10 @@ pub async fn send_state_event(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
+        event_content: EventContent::new(&event_type, event_content.into_inner())?,
         room_id: Some(room_id),
         sender: user_id,
-        ty: event_type,
         state_key: Some(state_key),
-        content: event_content.into_inner(),
         redacts: None,
         unsigned: None,
         event_id: None,
@@ -503,11 +502,10 @@ pub async fn send_event(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
+        event_content: EventContent::new(&event_type, event_content.into_inner())?,
         room_id: Some(room_id),
         sender: user_id,
-        ty: event_type,
         state_key: None,
-        content: event_content.into_inner(),
         unsigned: None,
         redacts: None,
         event_id: None,
