@@ -127,6 +127,7 @@ struct InviteState {
 
 #[derive(Debug, Serialize)]
 struct StrippedState {
+    #[serde(flatten)]
     content: EventContent,
     state_key: String,
     sender: MatrixId,
@@ -315,20 +316,16 @@ pub async fn sync(
 }
 
 #[get("/rooms/{room_id}/event/{event_id}")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
 pub async fn get_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    path_args: Path<(String, String)>,
+    Path((room_id, event_id)): Path<(String, String)>,
 ) -> Result<Json<Event>, Error> {
-    let (room_id, event_id) = path_args.into_inner();
-    let span = Span::current();
-    span.record("room_id", &room_id.as_str());
-    span.record("event_id", &event_id.as_str());
     let db = state.db_pool.get_handle().await?;
 
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    span.record("username", &username.as_str());
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
@@ -363,20 +360,15 @@ pub async fn get_state_event_key(
     get_state_event_inner(state, token, path_args.into_inner()).await
 }
 
-#[instrument(skip(state, token), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
 pub async fn get_state_event_inner(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     (room_id, event_type, state_key): (String, String, String),
 ) -> Result<Json<Event>, Error> {
-    let span = Span::current();
-    span.record("room_id", &room_id.as_str());
-    span.record("event_type", &event_type.as_str());
-    span.record("state_key", &state_key.as_str());
-
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    span.record("username", &username.as_str());
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
@@ -393,13 +385,12 @@ pub async fn get_state_event_inner(
 }
 
 #[get("/rooms/{room_id}/state")]
-#[instrument(skip_all, fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
 pub async fn get_state(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    room_id: Path<String>,
+    Path(room_id): Path<String>,
 ) -> Result<Json<Vec<Event>>, Error> {
-    let room_id = room_id.into_inner();
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     Span::current().record("username", &username.as_str());
@@ -433,11 +424,11 @@ pub struct MembersResponse {
 }
 
 #[get("/rooms/{room_id}/members")]
-#[instrument(skip_all, fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
+#[instrument(skip(state, token, req), fields(username = ""), err = Level::DEBUG)]
 pub async fn get_members(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    room_id: Path<String>,
+    Path(room_id): Path<String>,
     req: Query<MembersRequest>,
 ) -> Result<Json<MembersResponse>, Error> {
     let db = state.db_pool.get_handle().await?;
@@ -474,22 +465,16 @@ pub struct SendEventResponse {
 }
 
 #[put("/rooms/{room_id}/state/{event_type}/{state_key}")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip(state, token, event_content), fields(username = ""), err = Level::DEBUG)]
 pub async fn send_state_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req: Path<(String, String, String)>,
+    Path((room_id, event_type, state_key)): Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let (room_id, event_type, state_key) = req.into_inner();
-    let span = Span::current();
-    span.record("room_id", &room_id.as_str());
-    span.record("event_type", &event_type.as_str());
-    span.record("state_key", &state_key.as_str());
-
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    span.record("username", &username.as_str());
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
@@ -513,22 +498,16 @@ pub async fn send_state_event(
 }
 
 #[put("/rooms/{room_id}/send/{event_type}/{txn_id}")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip(state, token, event_content), fields(username = ""), err = Level::DEBUG)]
 pub async fn send_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req: Path<(String, String, String)>,
+    Path((room_id, event_type, txn_id)): Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let (room_id, event_type, txn_id) = req.into_inner();
-    let span = Span::current();
-    span.record("room_id", &room_id.as_str());
-    span.record("event_type", &event_type.as_str());
-    span.record("txn_id", &txn_id.as_str());
-
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    span.record("username", &username.as_str());
+    Span::current().record("username", &username.as_str());
     if !db.record_txn(token.0, txn_id.clone()).await? {
         return Err(Error::TxnIdExists);
     }

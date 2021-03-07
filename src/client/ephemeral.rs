@@ -3,7 +3,9 @@ use actix_web::{
     web::{Data, Json, Path},
 };
 use serde::Deserialize;
+use serde_json::{Value, json};
 use std::sync::Arc;
+use tracing::{Level, Span, instrument};
 
 use crate::{
     client::{auth::AccessToken, error::Error},
@@ -20,18 +22,20 @@ pub struct TypingRequest {
 }
 
 #[put("/rooms/{room_id}/typing/{user_id}")]
+#[instrument(skip(state, token, req), fields(username = ""), err = Level::DEBUG)]
 pub async fn typing(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    path_args: Path<(String, MatrixId)>,
+    Path((room_id, user_id)): Path<(String, MatrixId)>,
     req: Json<TypingRequest>,
-) -> Result<Json<()>, Error> {
-    let (room_id, user_id) = path_args.into_inner();
+) -> Result<Json<Value>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?;
-    if (username.as_deref(), state.config.domain.as_str()) != (Some(user_id.localpart()), user_id.domain()) {
+    let username = db.try_auth(token.0).await?.ok_or(Error::Forbidden)?;
+    Span::current().record("username", &username.as_str());
+
+    if (username.as_str(), state.config.domain.as_str()) != (user_id.localpart(), user_id.domain()) {
         return Err(Error::Forbidden);
     }
     db.set_typing(&room_id, &user_id, req.typing, req.timeout).await?;
-    Ok(Json(()))
+    Ok(Json(json!({})))
 }

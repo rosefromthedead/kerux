@@ -68,7 +68,7 @@ enum Preset {
 }
 
 #[post("/createRoom")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip_all, fields(username = ""), err = Level::DEBUG)]
 pub async fn create_room(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -308,13 +308,13 @@ pub struct InviteRequest {
 }
 
 #[post("/rooms/{room_id}/invite")]
-#[instrument(skip(state, token, req), fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
+#[instrument(skip(state, token, req), fields(username = ""), err = Level::DEBUG)]
 pub async fn invite(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    room_id: Path<String>,
+    Path(room_id): Path<String>,
     req: Json<InviteRequest>,
-) -> Result<Json<()>, Error> {
+) -> Result<Json<JsonValue>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
     Span::current().record("username", &username.as_str());
@@ -330,7 +330,7 @@ pub async fn invite(
             is_direct: false,
         }),
         sender: user_id.clone(),
-        room_id: Some(room_id.into_inner()),
+        room_id: Some(room_id),
         state_key: Some(invitee.clone_inner()),
         unsigned: None,
         redacts: None,
@@ -340,16 +340,15 @@ pub async fn invite(
 
     db.add_event(invite_event).await?;
 
-    Ok(Json(()))
+    Ok(Json(json!({})))
 }
 
 #[post("/join/{room_id_or_alias}")]
-#[instrument(
-    skip(state, token), fields(room_id_or_alias = &room_id_or_alias.as_str()), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
 pub async fn join_by_id_or_alias(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    room_id_or_alias: Path<String>,
+    Path(room_id_or_alias): Path<String>,
 ) -> Result<Json<JsonValue>, Error> {
     //TODO: implement server_name and third_party_signed args, and room aliases
     let mut db = state.db_pool.get_handle().await?;
@@ -377,6 +376,6 @@ pub async fn join_by_id_or_alias(
     db.add_event(event).await?;
 
     Ok(Json(serde_json::json!({
-        "room_id": *room_id_or_alias
+        "room_id": room_id_or_alias
     })))
 }

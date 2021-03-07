@@ -2,7 +2,7 @@ use actix_web::{
     web::{Data, Json, Path},
     get, post, put,
 };
-use tracing::{instrument, Level};
+use tracing::{Level, Span, instrument};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
@@ -18,12 +18,11 @@ use crate::{
 };
 
 #[get("/profile/{user_id}/avatar_url")]
-#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
+#[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_avatar_url(
     state: Data<Arc<ServerState>>,
-    user_id: Path<MatrixId>
+    Path(user_id): Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let user_id = user_id.into_inner();
     if user_id.domain() != state.config.domain {
         return Err(Error::Unimplemented);
     }
@@ -40,20 +39,21 @@ pub async fn get_avatar_url(
 }
 
 #[put("/profile/{user_id}/avatar_url")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip(state, token, body), fields(username = ""), err = Level::DEBUG)]
 pub async fn set_avatar_url(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req_id: Path<MatrixId>,
+    Path(req_id): Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    if *req_id.localpart() != username {
+    Span::current().record("username", &username.as_str());
+
+    if req_id.localpart() != username {
         return Err(Error::Forbidden);
     }
-
-    if *req_id.domain() != state.config.domain {
+    if req_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
@@ -65,12 +65,11 @@ pub async fn set_avatar_url(
 }
 
 #[get("/profile/{user_id}/displayname")]
-#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
+#[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_display_name(
     state: Data<Arc<ServerState>>,
-    user_id: Path<MatrixId>
+    Path(user_id): Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let user_id = user_id.into_inner();
     if user_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
@@ -87,20 +86,21 @@ pub async fn get_display_name(
 }
 
 #[put("/profile/{user_id}/displayname")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip(state, token, body), fields(username = ""), err = Level::DEBUG)]
 pub async fn set_display_name(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
-    req_id: Path<MatrixId>,
+    Path(req_id): Path<MatrixId>,
     body: Json<JsonValue>
 ) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
-    if *req_id.domain() != username {
+    Span::current().record("username", &username.as_str());
+
+    if req_id.localpart() != username {
         return Err(Error::Forbidden);
     }
-
-    if *req_id.domain() != state.config.domain {
+    if req_id.domain() != state.config.domain {
         return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
@@ -112,14 +112,13 @@ pub async fn set_display_name(
 }
 
 #[get("/profile/{user_id}")]
-#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
+#[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_profile(
     state: Data<Arc<ServerState>>,
-    user_id: Path<MatrixId>
+    Path(user_id): Path<MatrixId>
 ) -> Result<Json<JsonValue>, Error> {
-    let user_id = user_id.into_inner();
     if user_id.domain() != state.config.domain {
-        return Err(Error::Unimplemented);
+        return Err(Error::Unknown("User does not live on this homeserver".to_string()));
     }
 
     let db = state.db_pool.get_handle().await?;
