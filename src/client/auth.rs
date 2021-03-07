@@ -170,7 +170,7 @@ pub struct RegisterRequest {
 }
 
 #[post("/register")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip_all, fields(username = ""), err = Level::DEBUG)]
 pub async fn register(
     state: Data<Arc<ServerState>>,
     req: Json<RegisterRequest>,
