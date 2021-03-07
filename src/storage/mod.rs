@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use enum_extract::extract;
 use serde_json::Value as JsonValue;
 use std::collections::{HashSet, HashMap};
 use uuid::Uuid;
@@ -7,7 +8,7 @@ use crate::{
     events::{
         ephemeral::Typing,
         room::{Member, Membership},
-        Event, PduV4,
+        Event, EventContent, PduV4,
     },
     util::MatrixId,
 };
@@ -90,17 +91,17 @@ impl<'a> EventQuery<'a> {
             return false;
         }
 
-        if self.not_types.contains(&pdu.ty.as_str()) {
+        if self.not_types.contains(&pdu.event_content.get_type()) {
             return false;
         }
-        if !self.types.is_empty() && !self.types.contains(&pdu.ty.as_str()) {
+        if !self.types.is_empty() && !self.types.contains(&pdu.event_content.get_type()) {
             return false;
         }
 
         if let Some(ref value) = self.contains_json {
             let map = value.as_object().expect("contains_json must be an object");
             for (key, value) in map.iter() {
-                if pdu.content.get(key) != Some(value) {
+                if pdu.event_content.content_as_json().get(key) != Some(value) {
                     return false;
                 }
             }
@@ -172,6 +173,10 @@ pub trait Storage: Send + Sync {
     /// Returns the username for which this token is valid, if any
     async fn try_auth(&self, token: Uuid) -> Result<Option<String>, Self::Error>;
 
+    /// Records a transaction ID into the given access token and returns whether it is new
+    /// (unique).
+    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Self::Error>;
+
     /// Returns the given user's avatar URL and display name, if present
     async fn get_profile(&self, username: &str) -> Result<Option<UserProfile>, Self::Error>;
 
@@ -242,10 +247,8 @@ pub trait Storage: Send + Sync {
             .await?
             .0
             .pop();
-        let membership = event
-            .map(|e| serde_json::from_value(e.content).ok())
-            .flatten()
-            .map(|c: Member| c.membership);
+        let membership = event.map(
+            |e| extract!(EventContent::Member(_), e.event_content).unwrap().membership);
         Ok(membership)
     }
 

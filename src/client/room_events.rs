@@ -1,7 +1,8 @@
 use actix_web::{get, put, web::{Data, Json, Path, Query}};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
+use serde_json::{Value as JsonValue, json};
+use tracing::{Level, Span, instrument};
 use std::{
     collections::HashMap,
     sync::Arc
@@ -126,10 +127,8 @@ struct InviteState {
 
 #[derive(Debug, Serialize)]
 struct StrippedState {
-    content: JsonValue,
+    content: EventContent,
     state_key: String,
-    #[serde(rename = "type")]
-    ty: String,
     sender: MatrixId,
 }
 
@@ -146,6 +145,7 @@ struct Presence {
 }
 
 #[get("/sync")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn sync(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -191,45 +191,44 @@ pub async fn sync(
 
                 if !events.is_empty() || !state_events.is_empty() {
                     something_happened = true;
-                    let (joined, invited) = db.get_room_member_counts(&room_id).await?;
-                    let summary = RoomSummary {
-                        heroes: None,
-                        joined_member_count: joined,
-                        invited_member_count: invited,
-                    };
-                    let state = State { events: state_events };
-                    let timeline = Timeline {
-                        events,
-                        limited: false,
-                        prev_batch: String::from("empty"),
-                    };
-                    let ephemeral = Ephemeral {
-                        events: db.get_all_ephemeral(room_id).await?.into_iter().map(
-                            |(k, v)| KvPair {
-                                ty: k,
-                                content: v,
-                            }).collect()
-                    };
-                    let account_data = AccountData { events: Vec::new() };
-                    res.rooms.get_or_insert_with(Default::default).join.insert(
-                        String::from(room_id),
-                        JoinedRoom {
-                            summary,
-                            state,
-                            timeline,
-                            ephemeral,
-                            account_data,
-                        },
-                    );
                 }
+                let (joined, invited) = db.get_room_member_counts(&room_id).await?;
+                let summary = RoomSummary {
+                    heroes: None,
+                    joined_member_count: joined,
+                    invited_member_count: invited,
+                };
+                let state = State { events: state_events };
+                let timeline = Timeline {
+                    events,
+                    limited: false,
+                    prev_batch: String::from("empty"),
+                };
+                let ephemeral = Ephemeral {
+                    events: db.get_all_ephemeral(room_id).await?.into_iter().map(
+                        |(k, v)| KvPair {
+                            ty: k,
+                            content: v,
+                        }).collect()
+                };
+                let account_data = AccountData { events: Vec::new() };
+                res.rooms.get_or_insert_with(Default::default).join.insert(
+                    String::from(room_id),
+                    JoinedRoom {
+                        summary,
+                        state,
+                        timeline,
+                        ephemeral,
+                        account_data,
+                    },
+                );
             },
             Membership::Invite if !batch.invites.contains(room_id) => {
                 let events = db.get_full_state(&room_id).await?
                     .into_iter()
                     .map(|e| StrippedState {
-                        content: e.content,
+                        content: e.event_content,
                         state_key: e.state_key.unwrap(),
-                        ty: e.ty,
                         sender: e.sender,
                     })
                     .collect();
@@ -316,14 +315,20 @@ pub async fn sync(
 }
 
 #[get("/rooms/{room_id}/event/{event_id}")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn get_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     path_args: Path<(String, String)>,
 ) -> Result<Json<Event>, Error> {
     let (room_id, event_id) = path_args.into_inner();
+    let span = Span::current();
+    span.record("room_id", &room_id.as_str());
+    span.record("event_id", &event_id.as_str());
     let db = state.db_pool.get_handle().await?;
+
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    span.record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
@@ -358,13 +363,20 @@ pub async fn get_state_event_key(
     get_state_event_inner(state, token, path_args.into_inner()).await
 }
 
+#[instrument(skip(state, token), err = Level::DEBUG)]
 pub async fn get_state_event_inner(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     (room_id, event_type, state_key): (String, String, String),
 ) -> Result<Json<Event>, Error> {
+    let span = Span::current();
+    span.record("room_id", &room_id.as_str());
+    span.record("event_type", &event_type.as_str());
+    span.record("state_key", &state_key.as_str());
+
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    span.record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     if db.get_membership(
@@ -381,6 +393,7 @@ pub async fn get_state_event_inner(
 }
 
 #[get("/rooms/{room_id}/state")]
+#[instrument(skip_all, fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
 pub async fn get_state(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -389,6 +402,7 @@ pub async fn get_state(
     let room_id = room_id.into_inner();
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     match db.get_membership(
@@ -419,6 +433,7 @@ pub struct MembersResponse {
 }
 
 #[get("/rooms/{room_id}/members")]
+#[instrument(skip_all, fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
 pub async fn get_members(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -427,8 +442,9 @@ pub async fn get_members(
 ) -> Result<Json<MembersResponse>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
-    
+
     match db.get_membership(
         &user_id,
         &room_id
@@ -440,15 +456,13 @@ pub async fn get_members(
 
     let mut state = db.get_full_state(&room_id).await?;
     state.retain(|event| {
-        let membership: Membership = event.content.get("membership")
-            .expect("no membership in m.room.member")
-            .as_str()
-            .expect("membership is not a string")
-            .parse()
-            .unwrap();
-        event.ty == "m.room.member"
-        && if let Some(filter) = &req.membership { membership == *filter } else { true }
-        && if let Some(exclude) = &req.not_membership { membership != *exclude } else { true }
+        if let EventContent::Member(ref content) = &event.event_content {
+            let membership = &content.membership;
+            (if let Some(filter) = &req.membership { membership == filter } else { true }
+             && if let Some(exclude) = &req.not_membership { membership != exclude } else { true })
+        } else {
+            false
+        }
     });
 
     Ok(Json(MembersResponse { chunk: state }))
@@ -460,6 +474,7 @@ pub struct SendEventResponse {
 }
 
 #[put("/rooms/{room_id}/state/{event_type}/{state_key}")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn send_state_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -467,8 +482,14 @@ pub async fn send_state_event(
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
     let (room_id, event_type, state_key) = req.into_inner();
+    let span = Span::current();
+    span.record("room_id", &room_id.as_str());
+    span.record("event_type", &event_type.as_str());
+    span.record("state_key", &state_key.as_str());
+
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    span.record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
@@ -484,21 +505,33 @@ pub async fn send_state_event(
 
     let event_id = db.add_event(event).await?;
 
+    tracing::trace!(event_id = &event_id.as_str(), "Added event");
+
     Ok(Json(SendEventResponse {
         event_id,
     }))
 }
 
 #[put("/rooms/{room_id}/send/{event_type}/{txn_id}")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn send_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     req: Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let (room_id, event_type, _txn_id) = req.into_inner();
+    let (room_id, event_type, txn_id) = req.into_inner();
+    let span = Span::current();
+    span.record("room_id", &room_id.as_str());
+    span.record("event_type", &event_type.as_str());
+    span.record("txn_id", &txn_id.as_str());
+
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    span.record("username", &username.as_str());
+    if !db.record_txn(token.0, txn_id.clone()).await? {
+        return Err(Error::TxnIdExists);
+    }
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let event = Event {
@@ -506,13 +539,15 @@ pub async fn send_event(
         room_id: Some(room_id),
         sender: user_id,
         state_key: None,
-        unsigned: None,
+        unsigned: Some(json!({"transaction_id": txn_id})),
         redacts: None,
         event_id: None,
         origin_server_ts: None,
     };
 
     let event_id = db.add_event(event).await?;
+
+    tracing::trace!(event_id = &event_id.as_str(), "Added event");
 
     Ok(Json(SendEventResponse {
         event_id,

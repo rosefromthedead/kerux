@@ -2,6 +2,7 @@ use actix_web::{
     web::{Data, Json, Path},
     get, post, put,
 };
+use tracing::{instrument, Level};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::{
 };
 
 #[get("/profile/{user_id}/avatar_url")]
+#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
 pub async fn get_avatar_url(
     state: Data<Arc<ServerState>>,
     user_id: Path<MatrixId>
@@ -38,6 +40,7 @@ pub async fn get_avatar_url(
 }
 
 #[put("/profile/{user_id}/avatar_url")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn set_avatar_url(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -62,6 +65,7 @@ pub async fn set_avatar_url(
 }
 
 #[get("/profile/{user_id}/displayname")]
+#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
 pub async fn get_display_name(
     state: Data<Arc<ServerState>>,
     user_id: Path<MatrixId>
@@ -83,6 +87,7 @@ pub async fn get_display_name(
 }
 
 #[put("/profile/{user_id}/displayname")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn set_display_name(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -107,6 +112,7 @@ pub async fn set_display_name(
 }
 
 #[get("/profile/{user_id}")]
+#[instrument(skip_all, fields(user_id = ?*user_id), err = Level::DEBUG)]
 pub async fn get_profile(
     state: Data<Arc<ServerState>>,
     user_id: Path<MatrixId>
@@ -153,6 +159,7 @@ struct User {
 
 //TODO: actually implement this
 #[post("/user_directory/search")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn search_user_directory(
     state: Data<Arc<ServerState>>,
     req: Json<UserDirSearchRequest>,
@@ -199,6 +206,7 @@ pub enum Medium {
 }
 
 #[get("/account/3pid")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn get_3pids(
     _state: Data<Arc<ServerState>>,
     _token: AccessToken,

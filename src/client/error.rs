@@ -44,6 +44,8 @@ pub enum Error {
     InvalidParam(String),
     /// The specified room version is not supported.
     UnsupportedRoomVersion,
+    /// The specified transaction has already been started.
+    TxnIdExists,
 
     /// An encoded string in the URL was not valid UTF-8.
     UrlNotUtf8(Utf8Error),
@@ -68,7 +70,8 @@ impl ResponseError for Error {
             Forbidden | UnknownToken | MissingToken => StatusCode::FORBIDDEN,
             NotFound => StatusCode::NOT_FOUND,
             BadJson(_) | NotJson(_) | MissingParam(_) | InvalidParam(_) | UnsupportedRoomVersion
-                | UrlNotUtf8(_) | PasswordError(_) | Unknown(_) => StatusCode::BAD_REQUEST,
+                | UrlNotUtf8(_) | PasswordError(_) | Unknown(_)
+                | TxnIdExists => StatusCode::BAD_REQUEST,
             LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
             DbError(_) | IoError(_) | AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Unimplemented => StatusCode::NOT_IMPLEMENTED,
@@ -116,6 +119,10 @@ impl ResponseError for Error {
             UnsupportedRoomVersion => {
                 ("M_UNSUPPORTED_ROOM_VERSION",
                 "The specified room version is not supported.".to_string())
+            },
+            TxnIdExists => {
+                ("M_UNKNOWN",
+                "The specified transaction has already been started.".to_string())
             },
             UrlNotUtf8(error) => {
                 ("M_UNKNOWN",
@@ -197,6 +204,7 @@ impl From<MemStorageError> for Error {
         match e {
             MemStorageError::UserNotFound => Error::NotFound,
             MemStorageError::RoomNotFound => Error::NotFound,
+            MemStorageError::AccessTokenNotFound => Error::UnknownToken,
         }
     }
 }

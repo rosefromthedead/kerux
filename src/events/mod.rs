@@ -52,6 +52,16 @@ macro_rules! define_event_content {
                     Unknown { ty, .. } => ty,
                 }
             }
+
+            pub fn content_as_json(&self) -> JsonValue {
+                use EventContent::*;
+                match self {
+                    $(
+                    $variant_name(v) => serde_json::to_value(&v).unwrap(),
+                    )*
+                    Unknown { content, .. } => content.clone(),
+                }
+            }
         }
 
         impl<'de> Deserialize<'de> for EventContent {
@@ -228,6 +238,7 @@ impl UnhashedPdu {
 impl PduV4 {
     /// Turns a PDU into a format which is suitable for clients.
     pub fn to_client_format(self) -> Event {
+        let event_id = self.event_id();
         Event {
             event_content: self.event_content,
             room_id: Some(self.room_id),
@@ -235,8 +246,12 @@ impl PduV4 {
             state_key: self.state_key,
             unsigned: self.unsigned,
             redacts: self.redacts,
-            event_id: Some(self.hashes.sha256),
+            event_id: Some(event_id),
             origin_server_ts: Some(self.origin_server_ts),
         }
+    }
+
+    pub fn event_id(&self) -> String {
+        format!("${}", self.hashes.sha256)
     }
 }

@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use displaydoc::Display;
+use enum_extract::extract;
 use std::convert::TryInto;
 
 use crate::{
-    events::{Event, room},
+    events::{Event, EventContent, room},
     storage::{Storage, StorageManager},
     util::MxidError,
 };
@@ -59,21 +60,21 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
     ) -> Result<String, AddEventError> {
         let room_id = event.room_id.as_ref().unwrap();
         let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
-            Some(v) => {
-                (serde_json::from_value(v.content).map_err(AddEventError::InvalidPowerLevels)?,
-                Some(v.event_id.unwrap().clone()))
-            },
+            Some(v) => (
+                extract!(EventContent::PowerLevels(_), v.event_content).unwrap(),
+                Some(v.event_id.unwrap().clone()),
+            ),
             None => {
                 let create_event = self.get_state_event(room_id, "m.room.create", "").await?
                     .ok_or(AddEventError::RoomNotFound)?; //TODO: what if we're adding create?
-                let create_content: room::Create = serde_json::from_value(create_event.content)
-                    .map_err(AddEventError::InvalidCreate)?;
+                let create_content =
+                    extract!(EventContent::Create(_), create_event.event_content).unwrap();
                 (room::PowerLevels::no_event_default_levels(&create_content.creator), None)
             },
         };
         // Validate event
-        match &*event.ty {
-            "m.room.member" => {
+        match event.event_content {
+            EventContent::Member(_) => {
                 validate_member_event(self, &event, room_id, &power_levels).await?;
             },
             _ => {
@@ -83,7 +84,7 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
                 }
                 let user_level = power_levels.get_user_level(&event.sender);
                 let event_level = power_levels.get_event_level(
-                    &event.ty,
+                    &event.event_content.get_type(),
                     event.state_key.is_some(),
                 );
                 if user_level < event_level {
@@ -127,9 +128,13 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
         || AddEventError::InvalidEvent("no state key in m.room.member event".to_string())
     )?.try_into().map_err(|e: MxidError| AddEventError::InvalidEvent(e.to_string()))?;
     let prev_membership = db.get_membership(&affected_user, room_id).await?;
-    let new_member_content: room::Member = serde_json::from_value(event.content.clone())
-        .map_err(|e| AddEventError::InvalidEvent(format!("{}", e)))?;
-    let new_membership = new_member_content.membership;
+
+    // can't use extract because it's behind a reference how sad is that
+    let new_member_content = match event.event_content {
+        EventContent::Member(ref v) => v,
+        _ => panic!("m.room.member not a member event"),
+    };
+    let new_membership = &new_member_content.membership;
     use room::Membership::*;
     match new_membership {
         Join => {
@@ -145,8 +150,8 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
                     let join_rules_event = db.get_state_event(room_id, "m.room.join_rules", "").await?;
                     let is_public = match join_rules_event {
                         Some(e) => {
-                            let join_rules: room::JoinRules = serde_json::from_value(e.content)
-                                .map_err(AddEventError::InvalidJoinRules)?;
+                            let join_rules =
+                                extract!(EventContent::JoinRules(_), e.event_content).unwrap();
                             join_rules.join_rule == room::JoinRule::Public
                         },
                         None => false,
