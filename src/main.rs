@@ -1,12 +1,12 @@
 extern crate tokio_postgres as pg;
 
-use actix_web::{App, middleware::Logger, web::{self, JsonConfig}};
+use actix_web::{App, web::{self, JsonConfig}};
 use serde::Deserialize;
+use tracing_subscriber::EnvFilter;
 use std::sync::Arc;
 
 mod client;
 mod events;
-mod log;
 mod storage;
 mod util;
 
@@ -26,9 +26,19 @@ pub struct ServerState {
     pub db_pool: StorageManager,
 }
 
-#[actix_rt::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    run().await.map_err(|e| {
+        eprintln!("Error starting the server: {}", e);
+        std::io::Error::from(std::io::ErrorKind::Other)
+    })
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let config = toml::from_slice(&std::fs::read("config.toml")?)?;
     let db_pool = storage::mem::MemStorageManager::new();
@@ -38,13 +48,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_state2 = Arc::clone(&server_state);
     actix_web::HttpServer::new(move || {
         App::new()
-            .wrap(Logger::default())
             .data(Arc::clone(&server_state))
             .data(JsonConfig::default().error_handler(|e, _req| client::error::Error::from(e).into()))
             .service(web::scope("/_matrix/client").configure(client::cs_api))
             .service(util::print_the_world)
     })
-    .bind(&server_state2.config.bind_address)?
-    .run().await?;
+        .bind(&server_state2.config.bind_address)?
+        .run()
+        .await?;
     Ok(())
 }

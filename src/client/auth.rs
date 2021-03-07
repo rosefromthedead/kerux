@@ -3,9 +3,10 @@ use actix_web::{
     web::{Data, Json},
     get, post, HttpRequest, FromRequest,
 };
+use tracing::{instrument, Level, span::Span};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::{convert::TryFrom, sync::Arc};
 use uuid::Uuid;
 
 use crate::{client::error::Error, storage::{Storage, StorageManager}, util::MatrixId, ServerState};
@@ -16,6 +17,7 @@ enum LoginType {
     Password,
 }
 
+#[derive(Debug)]
 pub struct AccessToken(pub Uuid);
 
 impl FromRequest for AccessToken {
@@ -46,6 +48,7 @@ impl FromRequest for AccessToken {
 }
 
 #[get("/login")]
+#[instrument]
 pub async fn get_supported_login_types() -> Json<serde_json::Value> {
     //TODO: allow config
     Json(json!({
@@ -98,6 +101,7 @@ pub struct LoginResponse {
 }
 
 #[post("/login")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn login(
     state: Data<Arc<ServerState>>,
     req: Json<LoginRequest>,
@@ -105,11 +109,17 @@ pub async fn login(
     let req = req.into_inner();
 
     let username = match req.identifier {
-        Identifier::Username { user } => user,
+        Identifier::Username { user } => {
+            let res = MatrixId::try_from(&*user);
+            match res {
+                Ok(mxid) => mxid.localpart().to_string(),
+                Err(_) => user,
+            }
+        },
         _ => return Err(Error::Unimplemented),
     };
     let password = req.password.ok_or(Error::Unimplemented)?;
-    
+
     let db = state.db_pool.get_handle().await?;
     if !db.verify_password(&username, &password).await? {
         return Err(Error::Forbidden);
@@ -117,6 +127,8 @@ pub async fn login(
 
     let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
     let access_token = db.create_access_token(&username, &device_id).await?;
+
+    tracing::info!(username = username.as_str(), "User logged in");
 
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let access_token = format!("{}", access_token.to_hyphenated());
@@ -130,6 +142,7 @@ pub async fn login(
 }
 
 #[post("/logout")]
+#[instrument(skip(state), err = Level::DEBUG)]
 pub async fn logout(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     db.delete_access_token(token.0).await?;
@@ -137,9 +150,10 @@ pub async fn logout(state: Data<Arc<ServerState>>, token: AccessToken) -> Result
 }
 
 #[post("/logout/all")]
+#[instrument(skip(state), err = Level::DEBUG)]
 pub async fn logout_all(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
-    db.delete_all_access_tokens(token.0).await?;    
+    db.delete_all_access_tokens(token.0).await?;
     Ok(Json(()))
 }
 
@@ -156,6 +170,7 @@ pub struct RegisterRequest {
 }
 
 #[post("/register")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn register(
     state: Data<Arc<ServerState>>,
     req: Json<RegisterRequest>,
@@ -170,6 +185,8 @@ pub async fn register(
         None => return Err(Error::MissingParam("kind".to_string())),
     }
 
+    Span::current().record("username", &&*req.username);
+
     let user_id = MatrixId::new(&req.username, &state.config.domain)
         .map_err(|e| Error::BadJson(format!("{}", e)))?;
 
@@ -183,7 +200,7 @@ pub async fn register(
             "user_id": req.username
         })));
     }
-    
+
     let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
     let access_token = db.create_access_token(&user_id.localpart(), &device_id).await?;
     let access_token = format!("{}", access_token.to_hyphenated());

@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use displaydoc::Display;
+use log::info;
 use serde_json::Value as JsonValue;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc, time::{Duration, Instant},
 };
 use tokio::sync::{RwLock, broadcast::{channel, Sender}};
@@ -21,6 +22,7 @@ struct MemStorage {
     users: Vec<User>,
     access_tokens: HashMap<Uuid, String>,
     batches: HashMap<String, Batch>,
+    txn_ids: HashMap<Uuid, HashSet<String>>,
 }
 
 #[derive(Debug)]
@@ -53,6 +55,8 @@ pub enum Error {
     UserNotFound,
     /// The specified room was not found.
     RoomNotFound,
+    /// The specified access token was not found.
+    AccessTokenNotFound,
 }
 
 impl Room {
@@ -76,6 +80,7 @@ impl MemStorageManager {
                 users: Vec::new(),
                 access_tokens: HashMap::new(),
                 batches: HashMap::new(),
+                txn_ids: HashMap::new(),
             })),
         }
     }
@@ -164,6 +169,12 @@ impl super::Storage for MemStorageHandle {
         Ok(db.access_tokens.get(&token).cloned())
     }
 
+    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Self::Error> {
+        let mut db = self.inner.write().await;
+        let set = db.txn_ids.entry(token).or_insert_with(HashSet::new);
+        Ok(set.insert(txn_id))
+    }
+
     async fn get_profile(&self, username: &str) -> Result<Option<UserProfile>, Error> {
         let db = self.inner.read().await;
         Ok(db
@@ -223,7 +234,7 @@ impl super::Storage for MemStorageHandle {
         let depth = room.events.iter().map(|pdu| pdu.depth).max().unwrap();
         let prev_events = room.events.iter()
             .filter(|pdu| pdu.depth == depth)
-            .map(|pdu| String::from(&pdu.hashes.sha256))
+            .map(|pdu| pdu.event_id())
             .collect::<Vec<_>>();
         let Event {
             event_content,
@@ -244,13 +255,15 @@ impl super::Storage for MemStorageHandle {
             state_key,
             unsigned,
             redacts,
-            origin,
+            origin: origin.clone(),
             origin_server_ts,
             prev_events,
             depth: depth + 1,
             auth_events,
         }.finalize();
-        let event_id = pdu.hashes.sha256.clone();
+        let hash = pdu.hashes.sha256.clone();
+        let event_id = pdu.event_id();
+        tracing::trace!(?pdu, "Adding event to storage");
         room.events.push(pdu);
         let _ = room.notify_send.send(());
         Ok(event_id)
@@ -283,7 +296,7 @@ impl super::Storage for MemStorageHandle {
                 .filter(|pdu| query.matches(&pdu))
                 .cloned());
         }
-            
+
         if wait && ret.is_empty() && query.query_type.is_timeline() {
             let mut recv = room.notify_send.subscribe();
             // Release locks; we are about to wait for new events to come in, and they can't if we've
@@ -364,14 +377,13 @@ impl super::Storage for MemStorageHandle {
         let db = self.inner.read().await;
         let room = db.rooms.get(room_id).ok_or(Error::RoomNotFound)?;
         let mut ephemeral = room.ephemeral.clone();
-        
+
         let now = Instant::now();
         let mut typing = Typing::default();
         for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout < now) {
             typing.user_ids.insert(mxid.clone());
         }
         ephemeral.insert(String::from("m.typing"), serde_json::to_value(typing).unwrap());
-        dbg!(&ephemeral);
         Ok(ephemeral)
     }
 
@@ -425,7 +437,7 @@ impl super::Storage for MemStorageHandle {
             room.typing.remove(user_id);
         }
         let _ = room.notify_send.send(());
-        
+
         Ok(())
     }
 
@@ -456,9 +468,9 @@ impl super::Storage for MemStorageHandle {
 
     async fn print_the_world(&self) -> Result<(), Error> {
         let db = self.inner.read().await;
-        log::info!("{:#?}", db.rooms);
-        log::info!("{:#?}", db.users);
-        log::info!("{:#?}", db.access_tokens);
+        println!("{:#?}", db.rooms);
+        println!("{:#?}", db.users);
+        println!("{:#?}", db.access_tokens);
         Ok(())
     }
 }

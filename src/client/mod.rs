@@ -9,15 +9,6 @@ mod room_events;
 mod user;
 
 pub fn cs_api(cfg: &mut web::ServiceConfig) {
-    /*app.middleware(
-    CorsMiddleware::new()
-        .allow_origin("*")
-        .allow_methods(HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"))
-        .allow_headers(HeaderValue::from_static(
-            "Origin, X-Requested-With, Content-Type, Accept, Authorization",
-        )),
-    );*/
-    //    app.middleware(crate::log::handle);
     cfg.service(versions);
     let r0 = web::scope("/r0")
         .service(auth::get_supported_login_types)
@@ -48,14 +39,13 @@ pub fn cs_api(cfg: &mut web::ServiceConfig) {
         .service(room_events::send_event)
 
         .service(ephemeral::typing)
-        
-        .wrap(actix_cors::Cors::new()
+
+        .wrap(actix_cors::Cors::default()
             .send_wildcard()
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
             .allowed_headers(
                 vec!["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
             )
-            .finish()
         );
 
     cfg.service(r0);

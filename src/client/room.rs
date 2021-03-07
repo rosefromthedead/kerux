@@ -1,4 +1,5 @@
 use actix_web::{post, web::{Data, Json, Path}};
+use tracing::{Level, Span, instrument};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use std::{
@@ -67,6 +68,7 @@ enum Preset {
 }
 
 #[post("/createRoom")]
+#[instrument(skip_all, err = Level::DEBUG)]
 pub async fn create_room(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -75,6 +77,7 @@ pub async fn create_room(
     let req = req.into_inner();
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let room_version = req.room_version.unwrap_or("4".to_string());
@@ -292,6 +295,8 @@ pub async fn create_room(
 
     db.add_pdus(&events).await?;
 
+    tracing::info!(room_id = room_id.as_str(), "Created room");
+
     Ok(Json(json!({
         "room_id": room_id
     })))
@@ -303,6 +308,7 @@ pub struct InviteRequest {
 }
 
 #[post("/rooms/{room_id}/invite")]
+#[instrument(skip(state, token, req), fields(room_id = &room_id.as_str()), err = Level::DEBUG)]
 pub async fn invite(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -311,6 +317,7 @@ pub async fn invite(
 ) -> Result<Json<()>, Error> {
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let invitee = req.into_inner().user_id;
     let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
@@ -337,6 +344,8 @@ pub async fn invite(
 }
 
 #[post("/join/{room_id_or_alias}")]
+#[instrument(
+    skip(state, token), fields(room_id_or_alias = &room_id_or_alias.as_str()), err = Level::DEBUG)]
 pub async fn join_by_id_or_alias(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -345,6 +354,7 @@ pub async fn join_by_id_or_alias(
     //TODO: implement server_name and third_party_signed args, and room aliases
     let mut db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let profile = db.get_profile(&username).await?.unwrap_or_default();
 
