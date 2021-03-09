@@ -380,7 +380,7 @@ impl super::Storage for MemStorageHandle {
 
         let now = Instant::now();
         let mut typing = Typing::default();
-        for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout < now) {
+        for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout > now) {
             typing.user_ids.insert(mxid.clone());
         }
         ephemeral.insert(String::from("m.typing"), serde_json::to_value(typing).unwrap());
