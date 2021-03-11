@@ -524,6 +524,8 @@ pub async fn send_event(
         origin_server_ts: None,
     };
 
+    //TODO: is this right in the eyes of the spec? also does it matter?
+    db.set_typing(&room_id, &user_id, false, 0).await?;
     let event_id = db.add_event(event).await?;
 
     tracing::trace!(event_id = &event_id.as_str(), "Added event");
