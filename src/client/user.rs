@@ -2,7 +2,7 @@ use actix_web::{
     web::{Data, Json, Path},
     get, post, put,
 };
-use tracing::{Level, Span, instrument};
+use tracing::{Level, Span, instrument, field::Empty};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
@@ -39,7 +39,7 @@ pub async fn get_avatar_url(
 }
 
 #[put("/profile/{user_id}/avatar_url")]
-#[instrument(skip(state, token, body), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, body), fields(username = Empty), err = Level::DEBUG)]
 pub async fn set_avatar_url(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -86,7 +86,7 @@ pub async fn get_display_name(
 }
 
 #[put("/profile/{user_id}/displayname")]
-#[instrument(skip(state, token, body), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, body), fields(username = Empty), err = Level::DEBUG)]
 pub async fn set_display_name(
     state: Data<Arc<ServerState>>,
     token: AccessToken,

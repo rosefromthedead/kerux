@@ -2,7 +2,7 @@ use actix_web::{get, put, web::{Data, Json, Path, Query}};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
-use tracing::{Level, Span, instrument};
+use tracing::{Level, Span, instrument, field::Empty};
 use std::{
     collections::HashMap,
     sync::Arc
@@ -146,7 +146,7 @@ struct Presence {
 }
 
 #[get("/sync")]
-#[instrument(skip_all, err = Level::DEBUG)]
+#[instrument(skip_all, fields(username = Empty), err = Level::DEBUG)]
 pub async fn sync(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -154,6 +154,7 @@ pub async fn sync(
 ) -> Result<Json<SyncResponse>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let mut batch = db.get_batch(req.since.as_deref().unwrap_or("empty")).await?.unwrap_or_default();
@@ -316,7 +317,7 @@ pub async fn sync(
 }
 
 #[get("/rooms/{room_id}/event/{event_id}")]
-#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = Empty), err = Level::DEBUG)]
 pub async fn get_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -360,7 +361,7 @@ pub async fn get_state_event_key(
     get_state_event_inner(state, token, path_args.into_inner()).await
 }
 
-#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = Empty), err = Level::DEBUG)]
 pub async fn get_state_event_inner(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -385,7 +386,7 @@ pub async fn get_state_event_inner(
 }
 
 #[get("/rooms/{room_id}/state")]
-#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = Empty), err = Level::DEBUG)]
 pub async fn get_state(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -424,7 +425,7 @@ pub struct MembersResponse {
 }
 
 #[get("/rooms/{room_id}/members")]
-#[instrument(skip(state, token, req), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, req), fields(username = Empty), err = Level::DEBUG)]
 pub async fn get_members(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -465,7 +466,7 @@ pub struct SendEventResponse {
 }
 
 #[put("/rooms/{room_id}/state/{event_type}/{state_key}")]
-#[instrument(skip(state, token, event_content), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, event_content), fields(username = Empty), err = Level::DEBUG)]
 pub async fn send_state_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -498,7 +499,7 @@ pub async fn send_state_event(
 }
 
 #[put("/rooms/{room_id}/send/{event_type}/{txn_id}")]
-#[instrument(skip(state, token, event_content), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, event_content), fields(username = Empty), err = Level::DEBUG)]
 pub async fn send_event(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -515,8 +516,8 @@ pub async fn send_event(
 
     let event = Event {
         event_content: EventContent::new(&event_type, event_content.into_inner())?,
-        room_id: Some(room_id),
-        sender: user_id,
+        room_id: Some(room_id.clone()),
+        sender: user_id.clone(),
         state_key: None,
         unsigned: Some(json!({"transaction_id": txn_id})),
         redacts: None,
