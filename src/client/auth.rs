@@ -3,7 +3,7 @@ use actix_web::{
     web::{Data, Json},
     get, post, HttpRequest, FromRequest,
 };
-use tracing::{instrument, Level, span::Span};
+use tracing::{instrument, Level, span::Span, field::Empty};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{convert::TryFrom, sync::Arc};
@@ -170,7 +170,7 @@ pub struct RegisterRequest {
 }
 
 #[post("/register")]
-#[instrument(skip_all, fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip_all, fields(username = Empty), err = Level::DEBUG)]
 pub async fn register(
     state: Data<Arc<ServerState>>,
     req: Json<RegisterRequest>,

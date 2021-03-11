@@ -1,5 +1,5 @@
 use actix_web::{post, web::{Data, Json, Path}};
-use tracing::{Level, Span, instrument};
+use tracing::{Level, Span, instrument, field::Empty};
 use serde::Deserialize;
 use serde_json::{Value as JsonValue, json};
 use std::{
@@ -68,7 +68,7 @@ enum Preset {
 }
 
 #[post("/createRoom")]
-#[instrument(skip_all, fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip_all, fields(username = Empty), err = Level::DEBUG)]
 pub async fn create_room(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -308,7 +308,7 @@ pub struct InviteRequest {
 }
 
 #[post("/rooms/{room_id}/invite")]
-#[instrument(skip(state, token, req), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token, req), fields(username = Empty), err = Level::DEBUG)]
 pub async fn invite(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
@@ -344,7 +344,7 @@ pub async fn invite(
 }
 
 #[post("/join/{room_id_or_alias}")]
-#[instrument(skip(state, token), fields(username = ""), err = Level::DEBUG)]
+#[instrument(skip(state, token), fields(username = Empty), err = Level::DEBUG)]
 pub async fn join_by_id_or_alias(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
