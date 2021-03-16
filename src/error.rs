@@ -61,8 +61,6 @@ pub enum ErrorKind {
     UrlNotUtf8(Utf8Error),
     /// A database error occurred.
     DbError,
-    /// An I/O error occurred.
-    IoError(IoError),
     /// A password error occurred: {0}
     PasswordError(argon2::Error),
     /// The requested feature is unimplemented.
@@ -83,7 +81,7 @@ impl ResponseError for Error {
                 | UrlNotUtf8(_) | PasswordError(_) | Unknown(_)
                 | TxnIdExists => StatusCode::BAD_REQUEST,
             LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
-            DbError | IoError(_) | AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            DbError | AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Unimplemented => StatusCode::NOT_IMPLEMENTED,
         }
     }
@@ -100,7 +98,7 @@ impl ResponseError for Error {
             MissingParam(_) => "M_MISSING_PARAM",
             InvalidParam(_) => "M_INVALID_PARAM",
             UnsupportedRoomVersion => "M_UNSUPPORTED_ROOM_VERSION",
-            TxnIdExists | UrlNotUtf8(_) | DbError | IoError(_) | PasswordError(_)
+            TxnIdExists | UrlNotUtf8(_) | DbError | PasswordError(_)
                 | Unimplemented | AddEventError(_) | Unknown(_) => "M_UNKNOWN",
         };
         let error = format!("{}", self);
@@ -145,13 +143,6 @@ impl From<JsonError> for ErrorKind {
         }
     }
 }
-/*
-impl From<IoError> for Error {
-    fn from(e: IoError) -> Self {
-        Error::IoError(e)
-    }
-}
-*/
 
 impl From<argon2::Error> for ErrorKind {
     fn from(e: argon2::Error) -> Self {
