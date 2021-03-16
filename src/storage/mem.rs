@@ -85,12 +85,12 @@ impl Storage for MemStorageHandle {
     async fn create_user(
         &self,
         username: &str,
-        password_hash: Option<&str>,
+        password_hash: &str,
     ) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         db.users.push(User {
             username: username.to_string(),
-            password_hash: password_hash.unwrap().to_string(),
+            password_hash: password_hash.to_string(),
             profile: UserProfile {
                 avatar_url: None,
                 displayname: None,

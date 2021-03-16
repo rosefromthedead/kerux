@@ -196,7 +196,7 @@ pub async fn register(
     let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
 
     let db = state.db_pool.get_handle().await?;
-    db.create_user(&user_id.localpart(), Some(&password_hash)).await?;
+    db.create_user(&user_id.localpart(), &password_hash).await?;
     if req.inhibit_login {
         return Ok(Json(json!({
             "user_id": req.username
