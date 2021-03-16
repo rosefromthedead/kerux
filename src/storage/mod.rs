@@ -5,9 +5,9 @@ use std::collections::{HashSet, HashMap};
 use uuid::Uuid;
 
 use crate::{
+    error::Error,
     events::{
-        ephemeral::Typing,
-        room::{Member, Membership},
+        room::Membership,
         Event, EventContent, PduV4,
     },
     util::MatrixId,
@@ -137,59 +137,54 @@ pub struct Batch {
 
 #[async_trait]
 pub trait StorageManager {
-    type Handle: Storage;
-    type Error: std::error::Error;
-
-    async fn get_handle(&self) -> Result<Self::Handle, Self::Error>;
+    async fn get_handle(&self) -> Result<Box<dyn Storage>, Error>;
 }
 
 #[async_trait]
 pub trait Storage: Send + Sync {
-    type Error: std::error::Error;
-
     async fn create_user(
         &self,
         username: &str,
         password_hash: Option<&str>, //TODO: accept "password" and do the hashing here
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Error>;
 
     async fn verify_password(
         &self,
         username: &str,
         password: &str,
-    ) -> Result<bool, Self::Error>;
+    ) -> Result<bool, Error>;
 
     async fn create_access_token(
         &self,
         username: &str,
         device_id: &str,
-    ) -> Result<Uuid, Self::Error>;
+    ) -> Result<Uuid, Error>;
 
-    async fn delete_access_token(&self, token: Uuid) -> Result<(), Self::Error>;
+    async fn delete_access_token(&self, token: Uuid) -> Result<(), Error>;
 
     /// Deletes all access tokens associated with the same user as this one
-    async fn delete_all_access_tokens(&self, token: Uuid) -> Result<(), Self::Error>;
+    async fn delete_all_access_tokens(&self, token: Uuid) -> Result<(), Error>;
 
     /// Returns the username for which this token is valid, if any
-    async fn try_auth(&self, token: Uuid) -> Result<Option<String>, Self::Error>;
+    async fn try_auth(&self, token: Uuid) -> Result<Option<String>, Error>;
 
     /// Records a transaction ID into the given access token and returns whether it is new
     /// (unique).
-    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Self::Error>;
+    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Error>;
 
     /// Returns the given user's avatar URL and display name, if present
-    async fn get_profile(&self, username: &str) -> Result<Option<UserProfile>, Self::Error>;
+    async fn get_profile(&self, username: &str) -> Result<Option<UserProfile>, Error>;
 
     async fn set_avatar_url(&self, username: &str, avatar_url: &str)
-        -> Result<(), Self::Error>;
+        -> Result<(), Error>;
 
     async fn set_display_name(
         &self,
         username: &str,
         display_name: &str,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Error>;
 
-    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Self::Error>;
+    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error>;
 
     /// Adds the given event to the head of the room, *without* checking any of the following:
     /// * whether the event's contents are valid
@@ -203,19 +198,19 @@ pub trait Storage: Send + Sync {
         &self,
         event: Event,
         auth_events: Vec<String>,
-    ) -> Result<String, Self::Error>;
+    ) -> Result<String, Error>;
 
     async fn query_pdus<'a>(
         &self,
         query: EventQuery<'a>,
         wait: bool,
-    ) -> Result<(Vec<PduV4>, usize), Self::Error>;
+    ) -> Result<(Vec<PduV4>, usize), Error>;
 
     async fn query_events<'a>(
         &self,
         query: EventQuery<'a>,
         wait: bool,
-    ) -> Result<(Vec<Event>, usize), Self::Error> {
+    ) -> Result<(Vec<Event>, usize), Error> {
         let (pdus, next_batch) = self.query_pdus(query, wait).await?;
         return Ok((pdus.into_iter().map(PduV4::to_client_format).collect(), next_batch));
     }
@@ -223,13 +218,13 @@ pub trait Storage: Send + Sync {
     async fn get_memberships_by_user(
         &self,
         user_id: &MatrixId,
-    ) -> Result<HashMap<String, Membership>, Self::Error>;
+    ) -> Result<HashMap<String, Membership>, Error>;
 
     async fn get_membership(
         &self,
         user_id: &MatrixId,
         room_id: &str,
-    ) -> Result<Option<Membership>, Self::Error> {
+    ) -> Result<Option<Membership>, Error> {
         let event = self
             .query_events(EventQuery {
                 query_type: QueryType::State {
@@ -258,7 +253,7 @@ pub trait Storage: Send + Sync {
     async fn get_room_member_counts(
         &self,
         room_id: &str,
-    ) -> Result<(usize, usize), Self::Error> {
+    ) -> Result<(usize, usize), Error> {
         let join_query = EventQuery {
             query_type: QueryType::State {
                 at: None,
@@ -285,7 +280,7 @@ pub trait Storage: Send + Sync {
         Ok((join_count, invited_count))
     }
 
-    async fn get_full_state(&self, room_id: &str) -> Result<Vec<Event>, Self::Error> {
+    async fn get_full_state(&self, room_id: &str) -> Result<Vec<Event>, Error> {
         let (ret, _) = self.query_events(EventQuery {
             query_type: QueryType::State {
                 at: None,
@@ -307,7 +302,7 @@ pub trait Storage: Send + Sync {
         room_id: &str,
         event_type: &str,
         state_key: &str,
-    ) -> Result<Option<Event>, Self::Error> {
+    ) -> Result<Option<Event>, Error> {
         let ret = self.query_events(EventQuery {
             query_type: QueryType::State {
                 at: None,
@@ -328,25 +323,25 @@ pub trait Storage: Send + Sync {
         &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<Event>, Self::Error>;
+    ) -> Result<Option<Event>, Error>;
 
     async fn get_all_ephemeral(
         &self,
         room_id: &str,
-    ) -> Result<HashMap<String, JsonValue>, Self::Error>;
+    ) -> Result<HashMap<String, JsonValue>, Error>;
 
     async fn get_ephemeral(
         &self,
         room_id: &str,
         event_type: &str,
-    ) -> Result<Option<JsonValue>, Self::Error>;
+    ) -> Result<Option<JsonValue>, Error>;
 
     async fn set_ephemeral(
         &self,
         room_id: &str,
         event_type: &str,
         content: Option<JsonValue>,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Error>;
 
     async fn set_typing(
         &self,
@@ -354,18 +349,18 @@ pub trait Storage: Send + Sync {
         user_id: &MatrixId,
         is_typing: bool,
         timeout: u32,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), Error>;
 
     async fn get_user_account_data(
         &self,
         username: &str,
-    ) -> Result<HashMap<String, JsonValue>, Self::Error>;
+    ) -> Result<HashMap<String, JsonValue>, Error>;
 
-    async fn get_batch(&self, id: &str) -> Result<Option<Batch>, Self::Error>;
+    async fn get_batch(&self, id: &str) -> Result<Option<Batch>, Error>;
 
-    async fn set_batch(&self, id: &str, batch: Batch) -> Result<(), Self::Error>;
+    async fn set_batch(&self, id: &str, batch: Batch) -> Result<(), Error>;
 
-    async fn print_the_world(&self) -> Result<(), Self::Error> {
+    async fn print_the_world(&self) -> Result<(), Error> {
         Ok(())
     }
 }

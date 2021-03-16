@@ -3,7 +3,6 @@ use serde_json::json;
 
 mod auth;
 mod ephemeral;
-pub mod error;
 mod room;
 mod room_events;
 mod user;

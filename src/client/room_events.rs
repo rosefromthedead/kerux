@@ -10,10 +10,8 @@ use std::{
 use tokio::time::{Duration, delay_for};
 
 use crate::{
-    client::{
-        auth::AccessToken,
-        error::Error,
-    },
+    client::auth::AccessToken,
+    error::{Error, ErrorKind},
     events::{
         Event, EventContent,
         room::Membership,
@@ -153,7 +151,7 @@ pub async fn sync(
     req: Query<SyncRequest>,
 ) -> Result<Json<SyncResponse>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -325,7 +323,7 @@ pub async fn get_event(
 ) -> Result<Json<Event>, Error> {
     let db = state.db_pool.get_handle().await?;
 
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -333,12 +331,12 @@ pub async fn get_event(
         &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
-        return Err(Error::Forbidden);
+        return Err(ErrorKind::Forbidden.into());
     }
 
     match db.get_event(&room_id, &event_id).await? {
         Some(event) => Ok(Json(event)),
-        None => Err(Error::NotFound),
+        None => Err(ErrorKind::NotFound.into()),
     }
 }
 
@@ -368,7 +366,7 @@ pub async fn get_state_event_inner(
     (room_id, event_type, state_key): (String, String, String),
 ) -> Result<Json<Event>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -376,12 +374,12 @@ pub async fn get_state_event_inner(
         &user_id,
         &room_id
     ).await? != Some(Membership::Join) {
-        return Err(Error::Forbidden);
+        return Err(ErrorKind::Forbidden.into());
     }
 
     match db.get_state_event(&room_id, &event_type, &state_key).await? {
         Some(event) => Ok(Json(event)),
-        None => Err(Error::NotFound),
+        None => Err(ErrorKind::NotFound.into()),
     }
 }
 
@@ -393,7 +391,7 @@ pub async fn get_state(
     Path(room_id): Path<String>,
 ) -> Result<Json<Vec<Event>>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -402,8 +400,8 @@ pub async fn get_state(
         &room_id
     ).await? {
         Some(Membership::Join) => {},
-        Some(_) => return Err(Error::Unimplemented),
-        None => return Err(Error::Forbidden),
+        Some(_) => return Err(ErrorKind::Unimplemented.into()),
+        None => return Err(ErrorKind::Forbidden.into()),
     }
 
     let state = db.get_full_state(&room_id).await?;
@@ -433,7 +431,7 @@ pub async fn get_members(
     req: Query<MembersRequest>,
 ) -> Result<Json<MembersResponse>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -442,8 +440,8 @@ pub async fn get_members(
         &room_id
     ).await? {
         Some(Membership::Join) => {},
-        Some(_) => return Err(Error::Unimplemented),
-        None => return Err(Error::Forbidden),
+        Some(_) => return Err(ErrorKind::Unimplemented.into()),
+        None => return Err(ErrorKind::Forbidden.into()),
     }
 
     let mut state = db.get_full_state(&room_id).await?;
@@ -474,7 +472,7 @@ pub async fn send_state_event(
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
     let mut db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
@@ -507,10 +505,10 @@ pub async fn send_event(
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
     let mut db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     if !db.record_txn(token.0, txn_id.clone()).await? {
-        return Err(Error::TxnIdExists);
+        return Err(ErrorKind::TxnIdExists.into());
     }
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 

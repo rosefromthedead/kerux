@@ -9,7 +9,9 @@ use serde_json::json;
 use std::{convert::TryFrom, sync::Arc};
 use uuid::Uuid;
 
-use crate::{client::error::Error, storage::{Storage, StorageManager}, util::MatrixId, ServerState};
+use crate::{
+    error::{Error, ErrorKind}, storage::{Storage, StorageManager}, util::MatrixId, ServerState
+};
 
 #[derive(Debug, Deserialize)]
 enum LoginType {
@@ -27,22 +29,22 @@ impl FromRequest for AccessToken {
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         let res = (|| {
             if let Some(s) = req.headers().get("Authorization") {
-                let s: &str = s.to_str().map_err(|_| Error::MissingToken)?;
+                let s: &str = s.to_str().map_err(|_| ErrorKind::MissingToken)?;
                 if !s.starts_with("Bearer ") {
-                    return Err(Error::MissingToken);
+                    return Err(ErrorKind::MissingToken);
                 }
-                let token = s.trim_start_matches("Bearer ").parse().map_err(|_| Error::UnknownToken)?;
+                let token = s.trim_start_matches("Bearer ").parse().map_err(|_| ErrorKind::UnknownToken)?;
                 Ok(token)
-            } else if let Some(pair) = req.uri().query().ok_or(Error::MissingToken)?.split('&').find(|pair| pair.starts_with("access_token")) {
-                let token = pair.trim_start_matches("access_token=").parse().map_err(|_| Error::UnknownToken)?;
+            } else if let Some(pair) = req.uri().query().ok_or(ErrorKind::MissingToken)?.split('&').find(|pair| pair.starts_with("access_token")) {
+                let token = pair.trim_start_matches("access_token=").parse().map_err(|_| ErrorKind::UnknownToken)?;
                 Ok(token)
             } else {
-                Err(Error::MissingToken)
+                Err(ErrorKind::MissingToken)
             }
         })();
         match res {
             Ok(token) => futures::future::ok(AccessToken(token)),
-            Err(e) => futures::future::err(e),
+            Err(e) => futures::future::err(e.into()),
         }
     }
 }
@@ -116,13 +118,13 @@ pub async fn login(
                 Err(_) => user,
             }
         },
-        _ => return Err(Error::Unimplemented),
+        _ => return Err(ErrorKind::Unimplemented.into()),
     };
-    let password = req.password.ok_or(Error::Unimplemented)?;
+    let password = req.password.ok_or(ErrorKind::Unimplemented)?;
 
     let db = state.db_pool.get_handle().await?;
     if !db.verify_password(&username, &password).await? {
-        return Err(Error::Forbidden);
+        return Err(ErrorKind::Forbidden.into());
     }
 
     let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
@@ -180,15 +182,15 @@ pub async fn register(
     let query_string = http_req.query_string();
     match query_string.split('&').find(|s| s.starts_with("kind=")) {
         Some("kind=user") => {},
-        Some("kind=guest") => return Err(Error::Unimplemented),
-        Some(x) => return Err(Error::InvalidParam(x.to_string())),
-        None => return Err(Error::MissingParam("kind".to_string())),
+        Some("kind=guest") => return Err(ErrorKind::Unimplemented.into()),
+        Some(x) => return Err(ErrorKind::InvalidParam(x.to_string()).into()),
+        None => return Err(ErrorKind::MissingParam("kind".to_string()).into()),
     }
 
     Span::current().record("username", &&*req.username);
 
     let user_id = MatrixId::new(&req.username, &state.config.domain)
-        .map_err(|e| Error::BadJson(format!("{}", e)))?;
+        .map_err(|e| ErrorKind::BadJson(format!("{}", e)))?;
 
     let salt: [u8; 16] = rand::random();
     let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;

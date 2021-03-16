@@ -1182,6 +1182,7 @@ dependencies = [
  "tokio-postgres",
  "toml",
  "tracing 0.2.0",
+ "tracing-error",
  "tracing-subscriber",
  "uuid",
 ]
@@ -2163,6 +2164,14 @@ name = "tracing-core"
 version = "0.2.0"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tracing-error"
+version = "0.2.0"
+dependencies = [
+ "tracing 0.2.0",
+ "tracing-subscriber",
 ]
 
 [[package]]
