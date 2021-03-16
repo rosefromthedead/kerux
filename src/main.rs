@@ -1,3 +1,4 @@
+#[cfg(feature = "storage-postgres")]
 extern crate tokio_postgres as pg;
 
 use actix_web::{App, web::{self, JsonConfig}};

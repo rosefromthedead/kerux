@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["Rose Hudson <rose@krx.sh>"]
 edition = "2018"
 
+[features]
+default = ["storage-mem"]
+storage-mem = []
+storage-sled = ["sled"]
+storage-postgres = ["tokio-postgres"]
+
 [dependencies]
 actix-cors = "0.5.4"
 actix-rt = "2.1.0"
@@ -16,7 +22,6 @@ displaydoc = "0.1.5"
 enum_extract = "0.1.1"
 futures = "0.3.13"
 lazy_static = "1.4.0"
-log = "0.4.8"
 percent-encoding = "2"
 rand = "0.7.0"
 regex = { version = "1.3.4", default-features = false, features = ["perf"] }
@@ -26,9 +31,11 @@ serde = "1.0"
 serde_canonical = "0.1"
 serde_json = "1.0"
 tokio = { version = "0.2.13", features = ["macros", "sync"] }
-tokio-postgres = { version = "0.5.1", features = ["with-uuid-0_8", "with-serde_json-1"] }
 toml = "0.5.3"
 tracing = { path = "../tracing/tracing" }
 tracing-error = { path = "../tracing/tracing-error" }
 tracing-subscriber = { path = "../tracing/tracing-subscriber", features = ["fmt"] }
 uuid = { version = "0.8.1", features = ["v4"] }
+
+sled = { version = "0.34", optional = true }
+tokio-postgres = { version = "0.5.1", features = ["with-uuid-0_8", "with-serde_json-1"], optional = true }

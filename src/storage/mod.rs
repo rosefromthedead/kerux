@@ -13,8 +13,12 @@ use crate::{
     util::MatrixId,
 };
 
+#[cfg(feature = "storage-mem")]
 pub mod mem;
-//pub mod postgres;
+#[cfg(feature = "storage-sled")]
+pub mod sled;
+#[cfg(feature = "storage-postgres")]
+pub mod postgres;
 
 #[derive(Clone, Debug, Default)]
 pub struct UserProfile {
