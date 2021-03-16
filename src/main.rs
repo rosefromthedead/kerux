@@ -1,11 +1,13 @@
 extern crate tokio_postgres as pg;
 
 use actix_web::{App, web::{self, JsonConfig}};
+use error::Error;
 use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 use std::sync::Arc;
 
 mod client;
+mod error;
 mod events;
 mod storage;
 mod util;
@@ -49,7 +51,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     actix_web::HttpServer::new(move || {
         App::new()
             .data(Arc::clone(&server_state))
-            .data(JsonConfig::default().error_handler(|e, _req| client::error::Error::from(e).into()))
+            .data(JsonConfig::default().error_handler(|e, _req| Error::from(e).into()))
             .service(web::scope("/_matrix/client").configure(client::cs_api))
             .service(util::print_the_world)
     })

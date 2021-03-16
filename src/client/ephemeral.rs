@@ -8,7 +8,8 @@ use std::sync::Arc;
 use tracing::{Level, Span, instrument, field::Empty};
 
 use crate::{
-    client::{auth::AccessToken, error::Error},
+    client::auth::AccessToken,
+    error::{Error, ErrorKind},
     storage::{Storage, StorageManager},
     util::MatrixId,
     ServerState,
@@ -30,11 +31,11 @@ pub async fn typing(
     req: Json<TypingRequest>,
 ) -> Result<Json<Value>, Error> {
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::Forbidden)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::Forbidden)?;
     Span::current().record("username", &username.as_str());
 
     if (username.as_str(), state.config.domain.as_str()) != (user_id.localpart(), user_id.domain()) {
-        return Err(Error::Forbidden);
+        return Err(ErrorKind::Forbidden.into());
     }
     db.set_typing(&room_id, &user_id, req.typing, req.timeout).await?;
     Ok(Json(json!({})))

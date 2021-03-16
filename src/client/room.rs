@@ -8,10 +8,8 @@ use std::{
 };
 
 use crate::{
-    client::{
-        auth::AccessToken,
-        error::Error,
-    },
+    client::auth::AccessToken,
+    error::{Error, ErrorKind},
     events::{
         room, Event, EventContent, UnhashedPdu,
     },
@@ -76,14 +74,14 @@ pub async fn create_room(
 ) -> Result<Json<JsonValue>, Error> {
     let req = req.into_inner();
     let db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let room_version = req.room_version.unwrap_or("4".to_string());
     let is_direct = req.is_direct.unwrap_or(false);
     if room_version != "4" {
-        return Err(Error::UnsupportedRoomVersion);
+        return Err(ErrorKind::UnsupportedRoomVersion.into());
     }
 
     let room_id = format!("!{:016X}:{}", rand::random::<i64>(), state.config.domain);
@@ -316,7 +314,7 @@ pub async fn invite(
     req: Json<InviteRequest>,
 ) -> Result<Json<JsonValue>, Error> {
     let mut db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let invitee = req.into_inner().user_id;
@@ -352,7 +350,7 @@ pub async fn join_by_id_or_alias(
 ) -> Result<Json<JsonValue>, Error> {
     //TODO: implement server_name and third_party_signed args, and room aliases
     let mut db = state.db_pool.get_handle().await?;
-    let username = db.try_auth(token.0).await?.ok_or(Error::UnknownToken)?;
+    let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let profile = db.get_profile(&username).await?.unwrap_or_default();

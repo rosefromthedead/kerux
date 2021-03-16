@@ -4,12 +4,11 @@ use enum_extract::extract;
 use std::convert::TryInto;
 
 use crate::{
+    error::{Error, ErrorKind},
     events::{Event, EventContent, room},
     storage::{Storage, StorageManager},
     util::MxidError,
 };
-
-type DbError = <crate::StorageManager as StorageManager>::Error;
 
 #[derive(Debug, Display)]
 pub enum AddEventError {
@@ -21,25 +20,10 @@ pub enum AddEventError {
     UserNotInvited,
     /// A user tried to send an event to a room which does not exist.
     RoomNotFound,
-    /// The latest `m.room.power_levels` event in this room is invalid.
-    InvalidPowerLevels(serde_json::Error),
-    /// The latest `m.room.create` event in this room is invalid.
-    InvalidCreate(serde_json::Error),
-    /// The latest `m.room.join_rules` event in this room is invalid.
-    InvalidJoinRules(serde_json::Error),
     /// The user does not have the required power level to send this event.
     InsufficientPowerLevel,
     /// The event to be added was invalid.
     InvalidEvent(String),
-
-    /// A database error occurred.
-    DbError(DbError),
-}
-
-impl From<DbError> for AddEventError {
-    fn from(e: DbError) -> Self {
-        AddEventError::DbError(e)
-    }
 }
 
 #[async_trait]
@@ -47,17 +31,17 @@ pub trait StorageExt {
     async fn add_event(
         &mut self,
         event: Event,
-    ) -> Result<String, AddEventError>;
+    ) -> Result<String, Error>;
 
-    async fn create_test_users(&mut self) -> Result<(), DbError>;
+    async fn create_test_users(&mut self) -> Result<(), Error>;
 }
 
 #[async_trait]
-impl<T: Storage<Error = DbError>> StorageExt for T {
+impl StorageExt for Box<dyn Storage> {
     async fn add_event(
         &mut self,
         event: Event,
-    ) -> Result<String, AddEventError> {
+    ) -> Result<String, Error> {
         let room_id = event.room_id.as_ref().unwrap();
         let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
             Some(v) => (
@@ -75,12 +59,12 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
         // Validate event
         match event.event_content {
             EventContent::Member(_) => {
-                validate_member_event(self, &event, room_id, &power_levels).await?;
+                validate_member_event(&mut **self, &event, room_id, &power_levels).await?;
             },
             _ => {
                 let sender_membership = self.get_membership(&event.sender, room_id).await?;
                 if sender_membership != Some(room::Membership::Join) {
-                    return Err(AddEventError::UserNotInRoom);
+                    return Err(AddEventError::UserNotInRoom.into());
                 }
                 let user_level = power_levels.get_user_level(&event.sender);
                 let event_level = power_levels.get_event_level(
@@ -88,7 +72,7 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
                     event.state_key.is_some(),
                 );
                 if user_level < event_level {
-                    return Err(AddEventError::InsufficientPowerLevel);
+                    return Err(AddEventError::InsufficientPowerLevel.into());
                 }
             },
         }
@@ -102,7 +86,7 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
         Ok(event_id)
     }
 
-    async fn create_test_users(&mut self) -> Result<(), DbError> {
+    async fn create_test_users(&mut self) -> Result<(), Error> {
         // all passwords are "password"
         self.create_user("alice", Some(
             "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
@@ -117,12 +101,12 @@ impl<T: Storage<Error = DbError>> StorageExt for T {
     }
 }
 
-async fn validate_member_event<S: Storage<Error = DbError>>(
-    db: &mut S,
+async fn validate_member_event(
+    db: &mut dyn Storage,
     event: &Event,
     room_id: &str,
     power_levels: &room::PowerLevels,
-) -> Result<(), AddEventError> {
+) -> Result<(), Error> {
     let sender_membership = db.get_membership(&event.sender, room_id).await?;
     let affected_user = event.state_key.clone().ok_or_else(
         || AddEventError::InvalidEvent("no state key in m.room.member event".to_string())
@@ -141,11 +125,11 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
             if affected_user != event.sender {
                 return Err(AddEventError::InvalidEvent(
                     "user tried to set someone else's membership to join".to_string()
-                ));
+                ).into());
             }
             match prev_membership {
                 Some(Join) | Some(Invite) => {},
-                Some(Ban) => return Err(AddEventError::UserBanned),
+                Some(Ban) => return Err(AddEventError::UserBanned.into()),
                 _ => {
                     let join_rules_event = db.get_state_event(room_id, "m.room.join_rules", "").await?;
                     let is_public = match join_rules_event {
@@ -157,14 +141,14 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
                         None => false,
                     };
                     if !is_public {
-                        return Err(AddEventError::UserNotInvited);
+                        return Err(AddEventError::UserNotInvited.into());
                     }
                 },
             }
         },
         Leave => {
             if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom);
+                return Err(AddEventError::UserNotInRoom.into());
             }
             if event.state_key.as_deref() != Some(event.sender.as_str()) {
                 // users can set own membership to leave, but setting others'
@@ -172,28 +156,28 @@ async fn validate_member_event<S: Storage<Error = DbError>>(
                 let user_level = power_levels.get_user_level(&event.sender);
                 let kick_level = power_levels.kick();
                 if user_level < kick_level {
-                    return Err(AddEventError::InsufficientPowerLevel);
+                    return Err(AddEventError::InsufficientPowerLevel.into());
                 }
             }
         },
         Ban => {
             if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom);
+                return Err(AddEventError::UserNotInRoom.into());
             }
             let user_level = power_levels.get_user_level(&event.sender);
             let ban_level = power_levels.ban();
             if user_level < ban_level {
-                return Err(AddEventError::InsufficientPowerLevel);
+                return Err(AddEventError::InsufficientPowerLevel.into());
             }
         },
         Invite => {
             if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom);
+                return Err(AddEventError::UserNotInRoom.into());
             }
             let user_level = power_levels.get_user_level(&event.sender);
             let invite_level = power_levels.invite();
             if user_level < invite_level {
-                return Err(AddEventError::InsufficientPowerLevel);
+                return Err(AddEventError::InsufficientPowerLevel.into());
             }
         },
         Knock => unimplemented!(),

@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use displaydoc::Display;
-use log::info;
 use serde_json::Value as JsonValue;
 use std::{
     collections::{HashMap, HashSet},
@@ -10,12 +8,11 @@ use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
 use crate::{
-    client::error::Error as ClientApiError,
+    error::{Error, ErrorKind},
     events::{ephemeral::Typing, room::Membership, Event, EventContent, PduV4, UnhashedPdu},
-    storage::{EventQuery, QueryType, UserProfile},
+    storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile},
     util::MatrixId,
 };
-use super::Batch;
 
 struct MemStorage {
     rooms: HashMap<String, Room>,
@@ -49,16 +46,6 @@ pub struct MemStorageHandle {
     inner: Arc<RwLock<MemStorage>>,
 }
 
-#[derive(Debug, Display)]
-pub enum Error {
-    /// The specified user was not found.
-    UserNotFound,
-    /// The specified room was not found.
-    RoomNotFound,
-    /// The specified access token was not found.
-    AccessTokenNotFound,
-}
-
 impl Room {
     fn new() -> Self {
         Room {
@@ -69,8 +56,6 @@ impl Room {
         }
     }
 }
-
-impl std::error::Error for Error {}
 
 impl MemStorageManager {
     pub fn new() -> Self {
@@ -87,21 +72,16 @@ impl MemStorageManager {
 }
 
 #[async_trait]
-impl super::StorageManager for MemStorageManager {
-    type Handle = MemStorageHandle;
-    type Error = Error;
-
-    async fn get_handle(&self) -> Result<Self::Handle, Self::Error> {
-        Ok(MemStorageHandle {
+impl StorageManager for MemStorageManager {
+    async fn get_handle(&self) -> Result<Box<dyn Storage>, Error> {
+        Ok(Box::new(MemStorageHandle {
             inner: Arc::clone(&self.storage),
-        })
+        }))
     }
 }
 
 #[async_trait]
-impl super::Storage for MemStorageHandle {
-    type Error = Error;
-
+impl Storage for MemStorageHandle {
     async fn create_user(
         &self,
         username: &str,
@@ -127,10 +107,7 @@ impl super::Storage for MemStorageHandle {
             match argon2::verify_encoded(&user.password_hash, password.as_bytes()) {
                 Ok(true) => Ok(true),
                 Ok(false) => Ok(false),
-                Err(e) => {
-                    log::warn!("password error: {}", e);
-                    Ok(false)
-                }
+                Err(e) => Ok(false),
             }
         } else {
             Ok(false)
@@ -169,7 +146,7 @@ impl super::Storage for MemStorageHandle {
         Ok(db.access_tokens.get(&token).cloned())
     }
 
-    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Self::Error> {
+    async fn record_txn(&self, token: Uuid, txn_id: String) -> Result<bool, Error> {
         let mut db = self.inner.write().await;
         let set = db.txn_ids.entry(token).or_insert_with(HashSet::new);
         Ok(set.insert(txn_id))
@@ -190,7 +167,7 @@ impl super::Storage for MemStorageHandle {
             .users
             .iter_mut()
             .find(|u| u.username == username)
-            .ok_or(Error::UserNotFound)?;
+            .ok_or_else(|| ErrorKind::UserNotFound(username.to_string()))?;
         user.profile.avatar_url = Some(avatar_url.to_string());
         Ok(())
     }
@@ -201,7 +178,7 @@ impl super::Storage for MemStorageHandle {
             .users
             .iter_mut()
             .find(|u| u.username == username)
-            .ok_or(Error::UserNotFound)?;
+            .ok_or_else(|| ErrorKind::UserNotFound(username.to_string()))?;
         user.profile.displayname = Some(display_name.to_string());
         Ok(())
     }
@@ -220,7 +197,7 @@ impl super::Storage for MemStorageHandle {
             }
             db.rooms
                 .get_mut(&pdu.room_id)
-                .ok_or(Error::RoomNotFound)?
+                .ok_or_else(|| ErrorKind::RoomNotFound(pdu.room_id.clone()))?
                 .events
                 .push(pdu.clone());
         }
@@ -230,7 +207,8 @@ impl super::Storage for MemStorageHandle {
     async fn add_event_unchecked(&self, event: Event, auth_events: Vec<String>) -> Result<String, Error> {
         let mut db = self.inner.write().await;
         let room_id = event.room_id.as_ref().unwrap();
-        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get_mut(room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.clone()))?;
         let depth = room.events.iter().map(|pdu| pdu.depth).max().unwrap();
         let prev_events = room.events.iter()
             .filter(|pdu| pdu.depth == depth)
@@ -285,7 +263,8 @@ impl super::Storage for MemStorageHandle {
         };
 
         let db = self.inner.read().await;
-        let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get(query.room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(query.room_id.to_string()))?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
@@ -314,7 +293,8 @@ impl super::Storage for MemStorageHandle {
 
         // same again
         let db = self.inner.read().await;
-        let room = db.rooms.get(query.room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get(query.room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(query.room_id.to_string()))?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
@@ -384,9 +364,10 @@ impl super::Storage for MemStorageHandle {
     async fn get_all_ephemeral(
         &self,
         room_id: &str,
-    ) -> Result<HashMap<String, JsonValue>, Self::Error> {
+    ) -> Result<HashMap<String, JsonValue>, Error> {
         let db = self.inner.read().await;
-        let room = db.rooms.get(room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get(room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
         let mut ephemeral = room.ephemeral.clone();
 
         let now = Instant::now();
@@ -404,7 +385,8 @@ impl super::Storage for MemStorageHandle {
         event_type: &str,
     ) -> Result<Option<JsonValue>, Error> {
         let db = self.inner.read().await;
-        let room = db.rooms.get(room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get(room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
         if event_type == "m.typing" {
             let now = Instant::now();
             let mut ret = Typing::default();
@@ -421,10 +403,11 @@ impl super::Storage for MemStorageHandle {
         room_id: &str,
         event_type: &str,
         content: Option<JsonValue>,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), Error> {
         assert!(event_type != "m.typing", "m.typing should not be set directly");
         let mut db = self.inner.write().await;
-        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get_mut(room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
         match content {
             Some(c) => room.ephemeral.insert(String::from(event_type), c),
             None => room.ephemeral.remove(event_type),
@@ -439,9 +422,10 @@ impl super::Storage for MemStorageHandle {
         user_id: &MatrixId,
         is_typing: bool,
         timeout: u32,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), Error> {
         let mut db = self.inner.write().await;
-        let room = db.rooms.get_mut(room_id).ok_or(Error::RoomNotFound)?;
+        let room = db.rooms.get_mut(room_id)
+            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
         if is_typing {
             room.typing.insert(user_id.clone(), Instant::now() + Duration::from_millis(timeout as u64));
         } else {
