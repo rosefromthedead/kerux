@@ -88,15 +88,15 @@ impl StorageExt for Box<dyn Storage> {
 
     async fn create_test_users(&mut self) -> Result<(), Error> {
         // all passwords are "password"
-        self.create_user("alice", Some(
+        self.create_user("alice",
             "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        )).await?;
-        self.create_user("bob", Some(
+        ).await?;
+        self.create_user("bob",
             "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        )).await?;
-        self.create_user("carol", Some(
+        ).await?;
+        self.create_user("carol",
             "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        )).await?;
+        ).await?;
         Ok(())
     }
 }
