@@ -326,7 +326,7 @@ impl super::Storage for MemStorageHandle {
                 .cloned());
         }
 
-        if let QueryType::State { .. } = query.query_type {
+        if query.query_type.is_state() {
             ret.reverse();
             let mut seen = HashSet::new();
             // remove pdus that are older than another pdu with the same state key
