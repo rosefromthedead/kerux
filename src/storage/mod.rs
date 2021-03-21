@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use enum_extract::extract;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashSet, HashMap};
 use uuid::Uuid;
@@ -20,7 +21,7 @@ pub mod sled;
 #[cfg(feature = "storage-postgres")]
 pub mod postgres;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct UserProfile {
     pub avatar_url: Option<String>,
     pub displayname: Option<String>,
@@ -131,7 +132,7 @@ impl<'a> QueryType<'a> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Batch {
     /// Indices into the event storage of the rooms that the user is in.
     pub rooms: HashMap<String, usize>,
@@ -140,7 +141,7 @@ pub struct Batch {
 }
 
 #[async_trait]
-pub trait StorageManager {
+pub trait StorageManager: Send + Sync {
     async fn get_handle(&self) -> Result<Box<dyn Storage>, Error>;
 }
 
@@ -219,10 +220,7 @@ pub trait Storage: Send + Sync {
         return Ok((pdus.into_iter().map(PduV4::to_client_format).collect(), next_batch));
     }
 
-    async fn get_memberships_by_user(
-        &self,
-        user_id: &MatrixId,
-    ) -> Result<HashMap<String, Membership>, Error>;
+    async fn get_rooms(&self) -> Result<Vec<String>, Error>;
 
     async fn get_membership(
         &self,

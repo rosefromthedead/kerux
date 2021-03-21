@@ -187,7 +187,7 @@ pub struct UnhashedPdu {
 }
 
 /// A Persistent Data Unit (room event) for room version 4.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PduV4 {
 //  #[serde(flatten)]
     pub event_content: EventContent,

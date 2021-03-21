@@ -167,7 +167,7 @@ impl Storage for MemStorageHandle {
             .users
             .iter_mut()
             .find(|u| u.username == username)
-            .ok_or_else(|| ErrorKind::UserNotFound(username.to_string()))?;
+            .ok_or(ErrorKind::UserNotFound)?;
         user.profile.avatar_url = Some(avatar_url.to_string());
         Ok(())
     }
@@ -178,7 +178,7 @@ impl Storage for MemStorageHandle {
             .users
             .iter_mut()
             .find(|u| u.username == username)
-            .ok_or_else(|| ErrorKind::UserNotFound(username.to_string()))?;
+            .ok_or(ErrorKind::UserNotFound)?;
         user.profile.displayname = Some(display_name.to_string());
         Ok(())
     }
@@ -197,7 +197,7 @@ impl Storage for MemStorageHandle {
             }
             db.rooms
                 .get_mut(&pdu.room_id)
-                .ok_or_else(|| ErrorKind::RoomNotFound(pdu.room_id.clone()))?
+                .ok_or(ErrorKind::RoomNotFound)?
                 .events
                 .push(pdu.clone());
         }
@@ -208,7 +208,7 @@ impl Storage for MemStorageHandle {
         let mut db = self.inner.write().await;
         let room_id = event.room_id.as_ref().unwrap();
         let room = db.rooms.get_mut(room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.clone()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         let depth = room.events.iter().map(|pdu| pdu.depth).max().unwrap();
         let prev_events = room.events.iter()
             .filter(|pdu| pdu.depth == depth)
@@ -264,7 +264,7 @@ impl Storage for MemStorageHandle {
 
         let db = self.inner.read().await;
         let room = db.rooms.get(query.room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(query.room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
@@ -294,7 +294,7 @@ impl Storage for MemStorageHandle {
         // same again
         let db = self.inner.read().await;
         let room = db.rooms.get(query.room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(query.room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
@@ -319,22 +319,9 @@ impl Storage for MemStorageHandle {
         Ok((ret, to.unwrap()))
     }
 
-    async fn get_memberships_by_user(
-        &self,
-        user_id: &MatrixId,
-    ) -> Result<HashMap<String, Membership>, Error> {
-        let rooms = {
-            let db = self.inner.read().await;
-            db.rooms.keys().cloned().collect::<Vec<_>>()
-        };
-        let mut ret = HashMap::new();
-        for room_id in rooms {
-            let membership = self.get_membership(user_id, &room_id).await?;
-            if let Some(membership) = membership {
-                ret.insert(room_id.to_string(), membership);
-            }
-        }
-        Ok(ret)
+    async fn get_rooms(&self) -> Result<Vec<String>, Error> {
+        let db = self.inner.read().await;
+        Ok(db.rooms.keys().cloned().collect())
     }
 
     async fn get_event(
@@ -367,7 +354,7 @@ impl Storage for MemStorageHandle {
     ) -> Result<HashMap<String, JsonValue>, Error> {
         let db = self.inner.read().await;
         let room = db.rooms.get(room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         let mut ephemeral = room.ephemeral.clone();
 
         let now = Instant::now();
@@ -386,7 +373,7 @@ impl Storage for MemStorageHandle {
     ) -> Result<Option<JsonValue>, Error> {
         let db = self.inner.read().await;
         let room = db.rooms.get(room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         if event_type == "m.typing" {
             let now = Instant::now();
             let mut ret = Typing::default();
@@ -407,7 +394,7 @@ impl Storage for MemStorageHandle {
         assert!(event_type != "m.typing", "m.typing should not be set directly");
         let mut db = self.inner.write().await;
         let room = db.rooms.get_mut(room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         match content {
             Some(c) => room.ephemeral.insert(String::from(event_type), c),
             None => room.ephemeral.remove(event_type),
@@ -425,7 +412,7 @@ impl Storage for MemStorageHandle {
     ) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         let room = db.rooms.get_mut(room_id)
-            .ok_or_else(|| ErrorKind::RoomNotFound(room_id.to_string()))?;
+            .ok_or(ErrorKind::RoomNotFound)?;
         if is_typing {
             room.typing.insert(user_id.clone(), Instant::now() + Duration::from_millis(timeout as u64));
         } else {

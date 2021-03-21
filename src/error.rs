@@ -43,9 +43,11 @@ pub enum ErrorKind {
     /// No resource was found for this request.
     NotFound,
     /// The specified user was not found on this server.
-    UserNotFound(String),
+    UserNotFound,
     /// The specified room was not found on this server.
-    RoomNotFound(String),
+    RoomNotFound,
+    /// That username is already taken.
+    UsernameTaken,
     /// Too many requests have been sent in a short period of time.
     LimitExceeded,
     /// A required URL parameter was missing from the request: {0}
@@ -59,8 +61,12 @@ pub enum ErrorKind {
 
     /// An encoded string in the URL was not valid UTF-8: {0}
     UrlNotUtf8(Utf8Error),
-    /// A database error occurred.
-    DbError,
+    #[cfg(feature = "storage-sled")]
+    /// A database error occurred: {0}.
+    SledError(sled::Error),
+    #[cfg(feature = "storage-sled")]
+    /// A database error occurred: {0}.
+    BincodeError(bincode::Error),
     /// A password error occurred: {0}
     PasswordError(argon2::Error),
     /// The requested feature is unimplemented.
@@ -75,13 +81,15 @@ impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
         use ErrorKind::*;
         match self.inner {
-            Forbidden | UnknownToken | MissingToken => StatusCode::FORBIDDEN,
-            NotFound | UserNotFound(_) | RoomNotFound(_) => StatusCode::NOT_FOUND,
+            Forbidden | UnknownToken | MissingToken | UsernameTaken => StatusCode::FORBIDDEN,
+            NotFound | UserNotFound | RoomNotFound => StatusCode::NOT_FOUND,
             BadJson(_) | NotJson(_) | MissingParam(_) | InvalidParam(_) | UnsupportedRoomVersion
                 | UrlNotUtf8(_) | PasswordError(_) | Unknown(_)
                 | TxnIdExists => StatusCode::BAD_REQUEST,
             LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
-            DbError | AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            #[cfg(feature = "storage-sled")]
+            SledError(_) | BincodeError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Unimplemented => StatusCode::NOT_IMPLEMENTED,
         }
     }
@@ -93,13 +101,16 @@ impl ResponseError for Error {
             MissingToken => "M_MISSING_TOKEN",
             BadJson(_) => "M_BAD_JSON",
             NotJson(_) => "M_NOT_JSON",
-            NotFound | UserNotFound(_) | RoomNotFound(_) => "M_NOT_FOUND",
+            NotFound | UserNotFound | RoomNotFound => "M_NOT_FOUND",
+            UsernameTaken => "M_USER_IN_USE",
             LimitExceeded => "M_LIMIT_EXCEEDED",
             MissingParam(_) => "M_MISSING_PARAM",
             InvalidParam(_) => "M_INVALID_PARAM",
             UnsupportedRoomVersion => "M_UNSUPPORTED_ROOM_VERSION",
-            TxnIdExists | UrlNotUtf8(_) | DbError | PasswordError(_)
+            TxnIdExists | UrlNotUtf8(_) | PasswordError(_)
                 | Unimplemented | AddEventError(_) | Unknown(_) => "M_UNKNOWN",
+            #[cfg(feature = "storage-sled")]
+            SledError(_) | BincodeError(_) => "M_UNKNOWN",
         };
         let error = format!("{}", self);
         HttpResponseBuilder::new(self.status_code())
@@ -153,5 +164,19 @@ impl From<argon2::Error> for ErrorKind {
 impl From<AddEventError> for ErrorKind {
     fn from(e: AddEventError) -> Self {
         ErrorKind::AddEventError(e)
+    }
+}
+
+#[cfg(feature = "storage-sled")]
+impl From<sled::Error> for ErrorKind {
+    fn from(e: sled::Error) -> Self {
+        ErrorKind::SledError(e)
+    }
+}
+
+#[cfg(feature = "storage-sled")]
+impl From<bincode::Error> for ErrorKind {
+    fn from(e: bincode::Error) -> Self {
+        ErrorKind::BincodeError(e)
     }
 }
