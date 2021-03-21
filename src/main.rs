@@ -13,20 +13,19 @@ mod events;
 mod storage;
 mod util;
 
-use storage::StorageManager as _;
+use storage::StorageManager;
 use util::StorageExt;
-
-type StorageManager = storage::mem::MemStorageManager;
 
 #[derive(Deserialize)]
 pub struct Config {
     domain: String,
     bind_address: String,
+    storage: String,
 }
 
 pub struct ServerState {
     pub config: Config,
-    pub db_pool: StorageManager,
+    pub db_pool: Box<dyn StorageManager>,
 }
 
 #[actix_web::main]
@@ -43,9 +42,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let config = toml::from_slice(&std::fs::read("config.toml")?)?;
-    let db_pool = storage::mem::MemStorageManager::new();
-    db_pool.get_handle().await?.create_test_users().await?;
+    let config: Config = toml::from_slice(&std::fs::read("config.toml")?)?;
+    let db_pool = match &*config.storage {
+        "mem" => {
+            let storage = Box::new(storage::mem::MemStorageManager::new()) as Box<dyn StorageManager>;
+            storage.get_handle().await?.create_test_users().await?;
+            storage
+        },
+        "sled" => Box::new(storage::sled::SledStorage::new("sled")?) as _,
+        _ => panic!("invalid storage type"),
+    };
     let server_state = Arc::new(ServerState { config, db_pool });
 
     let server_state2 = Arc::clone(&server_state);

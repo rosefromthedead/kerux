@@ -166,9 +166,15 @@ pub async fn sync(
         },
     };
 
-    let memberships = db.get_memberships_by_user(&user_id).await?;
+    let rooms = db.get_rooms().await?;
+    let mut memberships = HashMap::new();
+    for room_id in rooms.iter() {
+        if let Some(membership) = db.get_membership(&user_id, room_id).await? {
+            memberships.insert(room_id, membership);
+        }
+    }
     let mut something_happened = false;
-    for (room_id, membership) in memberships.iter() {
+    for (&room_id, membership) in memberships.iter() {
         match membership {
             Membership::Join => {
                 batch.invites.remove(room_id);
@@ -252,7 +258,7 @@ pub async fn sync(
     }
 
     let mut queries = Vec::new();
-    for (room_id, _) in memberships.iter().filter(|(_, m)| **m == Membership::Join) {
+    for (&room_id, _) in memberships.iter().filter(|(_, m)| **m == Membership::Join) {
         let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
         let room_id_clone = String::from(room_id);
         queries.push(db.query_events(EventQuery {
