@@ -26,7 +26,7 @@ pub enum AddEventError {
 #[async_trait]
 pub trait StorageExt {
     async fn add_event(
-        &mut self,
+        &self,
         event: Event,
     ) -> Result<String, Error>;
 
@@ -36,13 +36,13 @@ pub trait StorageExt {
     /// room version 1
     async fn auth_check_v1(&self, pdu: &PduV4, state: &State) -> Result<bool, Error>;
 
-    async fn create_test_users(&mut self) -> Result<(), Error>;
+    async fn create_test_users(&self) -> Result<(), Error>;
 }
 
 #[async_trait]
-impl StorageExt for Box<dyn Storage> {
+impl<'a> StorageExt for dyn Storage + 'a {
     async fn add_event(
-        &mut self,
+        &self,
         event: Event,
     ) -> Result<String, Error> {
         let room_id = event.room_id.as_ref().unwrap();
@@ -62,7 +62,7 @@ impl StorageExt for Box<dyn Storage> {
         // Validate event
         match event.event_content {
             EventContent::Member(_) => {
-                validate_member_event(&mut **self, &event, room_id, &power_levels).await?;
+                validate_member_event(self, &event, room_id, &power_levels).await?;
             },
             _ => {
                 let sender_membership = self.get_membership(&event.sender, room_id).await?;
@@ -425,7 +425,7 @@ impl StorageExt for Box<dyn Storage> {
         Ok(true)
     }
 
-    async fn create_test_users(&mut self) -> Result<(), Error> {
+    async fn create_test_users(&self) -> Result<(), Error> {
         // all passwords are "password"
         self.create_user("alice",
             "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
@@ -441,7 +441,7 @@ impl StorageExt for Box<dyn Storage> {
 }
 
 async fn validate_member_event(
-    db: &mut dyn Storage,
+    db: &dyn Storage,
     event: &Event,
     room_id: &str,
     power_levels: &room::PowerLevels,

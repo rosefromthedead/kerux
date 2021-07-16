@@ -522,10 +522,9 @@ impl Storage for SledStorageHandle {
             .map_err(Into::into)
     }
 
-    async fn get_event(&self, room_id: &str, event_id: &str) -> Result<Option<Event>, Error> {
+    async fn get_pdu(&self, room_id: &str, event_id: &str) -> Result<Option<PduV4>, Error> {
         self.events
             .get_value(&format!("{}_{}", room_id, event_id))
-            .map(|option| option.map(|pdu: PduV4| pdu.to_client_format()))
             .map_err(Into::into)
     }
 

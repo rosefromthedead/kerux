@@ -53,7 +53,7 @@ impl MatrixId {
     }
 
     /// Verifies that a localpart and domain could together form a valid Matrix ID.
-    fn validate_parts(localpart: &str, domain: &str) -> Result<(), MxidError> {
+    pub fn validate_parts(localpart: &str, domain: &str) -> Result<(), MxidError> {
         if localpart.contains(|c: char| {
             !c.is_ascii_lowercase()
                 && !c.is_ascii_digit()
@@ -78,7 +78,7 @@ impl MatrixId {
     }
 
     /// Verifies that a `&str` forms a valid Matrix ID.
-    fn validate_all(mxid: &str) -> Result<(), MxidError> {
+    pub fn validate_all(mxid: &str) -> Result<(), MxidError> {
         if !mxid.starts_with('@') {
             return Err(MxidError::NoLeadingAt);
         }

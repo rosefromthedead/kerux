@@ -340,8 +340,8 @@ pub async fn get_event(
         return Err(ErrorKind::Forbidden.into());
     }
 
-    match db.get_event(&room_id, &event_id).await? {
-        Some(event) => Ok(Json(event)),
+    match db.get_pdu(&room_id, &event_id).await? {
+        Some(pdu) => Ok(Json(pdu.to_client_format())),
         None => Err(ErrorKind::NotFound.into()),
     }
 }

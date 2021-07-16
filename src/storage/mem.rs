@@ -324,27 +324,18 @@ impl Storage for MemStorageHandle {
         Ok(db.rooms.keys().cloned().collect())
     }
 
-    async fn get_event(
+    async fn get_pdu(
         &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<Event>, Error> {
+    ) -> Result<Option<PduV4>, Error> {
         let db = self.inner.read().await;
         let event = db
             .rooms
             .get(room_id)
             .map(|r| r.events.iter().find(|e| e.hashes.sha256 == event_id))
             .flatten()
-            .map(|event| Event {
-                event_content: event.event_content.clone(),
-                room_id: None,
-                sender: event.sender.clone(),
-                state_key: event.state_key.clone(),
-                unsigned: event.unsigned.clone(),
-                redacts: event.redacts.clone(),
-                event_id: Some(event.hashes.sha256.clone()),
-                origin_server_ts: Some(event.origin_server_ts),
-            });
+            .cloned();
         Ok(event)
     }
 
