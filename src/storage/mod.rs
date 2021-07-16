@@ -321,11 +321,11 @@ pub trait Storage: Send + Sync {
         Ok(ret)
     }
 
-    async fn get_event(
+    async fn get_pdu(
         &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<Event>, Error>;
+    ) -> Result<Option<PduV4>, Error>;
 
     async fn get_all_ephemeral(
         &self,

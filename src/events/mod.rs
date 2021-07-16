@@ -8,6 +8,10 @@ use crate::util::MatrixId;
 pub mod ephemeral;
 pub mod room;
 
+pub trait EventType: std::convert::TryFrom<EventContent> + Into<EventContent> {
+    const EVENT_TYPE: &'static str;
+}
+
 macro_rules! define_event_content {
     (
         $(#[$attr:meta])*
@@ -32,6 +36,29 @@ macro_rules! define_event_content {
                 content: JsonValue
             },
         }
+
+        $(
+        impl EventType for $content_type {
+            const EVENT_TYPE: &'static str = $ty;
+        }
+
+        impl std::convert::TryFrom<EventContent> for $content_type {
+            type Error = EventContent;
+            fn try_from(content: EventContent) -> Result<$content_type, EventContent> {
+                use EventContent::*;
+                match content {
+                    $variant_name(v) => Ok(v),
+                    _ => Err(content),
+                }
+            }
+        }
+
+        impl From<$content_type> for EventContent {
+            fn from(v: $content_type) -> Self {
+                EventContent::$variant_name(v)
+            }
+        }
+        )*
 
         impl EventContent {
             pub fn new(ty: &str, content: JsonValue) -> Result<Self, serde_json::Error> {
@@ -133,6 +160,8 @@ define_event_content! {
         PowerLevels(room::PowerLevels),
         #[ty = "m.room.member"]
         Member(room::Member),
+        #[ty = "m.room.redaction"]
+        Redaction(room::Redaction),
 
         Unknown {
             ty: String,

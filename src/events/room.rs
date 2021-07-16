@@ -78,16 +78,16 @@ pub struct Topic {
 /// m.room.power_levels
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PowerLevels {
-    ban: Option<u32>,
-    invite: Option<u32>,
-    kick: Option<u32>,
-    redact: Option<u32>,
-    events: HashMap<String, u32>,
-    events_default: Option<u32>,
-    state_default: Option<u32>,
-    users: HashMap<MatrixId, u32>,
-    users_default: Option<u32>,
-    notifications: Notifications,
+    pub ban: Option<u32>,
+    pub invite: Option<u32>,
+    pub kick: Option<u32>,
+    pub redact: Option<u32>,
+    pub events: HashMap<String, u32>,
+    pub events_default: Option<u32>,
+    pub state_default: Option<u32>,
+    pub users: HashMap<MatrixId, u32>,
+    pub users_default: Option<u32>,
+    pub notifications: Notifications,
 }
 
 impl PowerLevels {
@@ -126,6 +126,18 @@ impl PowerLevels {
 
     pub fn redact(&self) -> u32 {
         self.kick.unwrap_or(50)
+    }
+
+    pub fn events_default(&self) -> u32 {
+        self.events_default.unwrap_or(0)
+    }
+
+    pub fn state_default(&self) -> u32 {
+        self.state_default.unwrap_or(50)
+    }
+
+    pub fn users_default(&self) -> u32 {
+        self.users_default.unwrap_or(0)
     }
 
     pub fn get_user_level(&self, user_id: &MatrixId) -> u32 {
@@ -219,4 +231,9 @@ impl ToString for Membership {
             Leave => "leave",
         }.to_string()
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Redaction {
+    reason: String,
 }
