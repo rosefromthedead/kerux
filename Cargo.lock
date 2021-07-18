@@ -2226,6 +2226,7 @@ dependencies = [
 [[package]]
 name = "tracing"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "cfg-if 1.0.0",
  "pin-project-lite 0.2.6",
@@ -2236,6 +2237,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2254,6 +2256,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "lazy_static",
 ]
@@ -2261,6 +2264,7 @@ dependencies = [
 [[package]]
 name = "tracing-error"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "tracing 0.2.0",
  "tracing-subscriber",
@@ -2279,6 +2283,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "lazy_static",
  "log",
@@ -2288,6 +2293,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "serde",
  "tracing-core 0.2.0",
@@ -2296,6 +2302,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.0"
+source = "git+https://github.com/rosehuds/tracing#6b5f4521a9f98325a9fdbae588b16795fd75aee5"
 dependencies = [
  "ansi_term",
  "chrono",
