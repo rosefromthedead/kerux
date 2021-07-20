@@ -4,7 +4,6 @@ use std::sync::Arc;
 use crate::{storage::{Storage, StorageManager}, ServerState};
 
 pub mod mxid;
-pub mod state;
 pub mod storage;
 
 pub use storage::StorageExt;
