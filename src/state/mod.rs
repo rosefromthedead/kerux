@@ -145,7 +145,7 @@ impl StateResolver {
                     frankenstate.insert_event(&auth_event);
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                self.db.auth_check_v1(&event, &frankenstate).await?;
+                crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await?;
                 partially_resolved_state.insert((Cow::from(event.event_content.get_type().to_string()), Cow::from(state_key.clone())), event_id.clone());
             }
         }
@@ -214,7 +214,7 @@ impl StateResolver {
                     frankenstate.insert_event(&auth_event);
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                self.db.auth_check_v1(&event, &frankenstate).await?;
+                crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await?;
                 partially_resolved_state.insert((Cow::from(event.event_content.get_type().to_string()), Cow::from(state_key.clone())), event.event_id().clone());
             }
         }

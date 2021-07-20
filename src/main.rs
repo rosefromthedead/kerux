@@ -10,8 +10,10 @@ use std::sync::Arc;
 mod client;
 mod error;
 mod events;
+mod state;
 mod storage;
 mod util;
+mod validate;
 
 use storage::StorageManager;
 use util::StorageExt;
