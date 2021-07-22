@@ -1,5 +1,5 @@
 [package]
-name = "matrix_server"
+name = "kerux"
 version = "0.1.0"
 authors = ["Rose Hudson <rose@krx.sh>"]
 edition = "2018"
