@@ -17,12 +17,7 @@ use sled::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{
-    error::{Error, ErrorKind},
-    events::{ephemeral::Typing, Event, PduV4, UnhashedPdu},
-    storage::{Storage, StorageManager},
-    util::MatrixId,
-};
+use crate::{error::{Error, ErrorKind}, events::{Event, UnhashedPdu, ephemeral::Typing, pdu::StoredPdu, room_version::VersionedPdu}, storage::{Storage, StorageManager}, util::MatrixId};
 
 use super::{Batch, EventQuery, QueryType, UserProfile};
 
@@ -237,7 +232,7 @@ impl SledStorageHandle {
         }
     }
 
-    async fn get_events(&self, ordering_tree: &Tree, query: &EventQuery<'_>, from: usize, mut to: Option<usize>) -> Result<(Vec<PduV4>, usize), Error> {
+    async fn get_events(&self, ordering_tree: &Tree, query: &EventQuery<'_>, from: usize, mut to: Option<usize>) -> Result<(Vec<StoredPdu>, usize), Error> {
         let mut ret = Vec::new();
         if to.is_none() {
             let bytes = ordering_tree.scan_prefix(&[0]).last().unwrap()?.0;
@@ -266,8 +261,8 @@ impl SledStorageHandle {
         for pdu in pdu_iter {
             // is Ok(None) if the event is not present, but it must be present if it's in the
             // ordering tree
-            let pdu = DefaultOptions::new().deserialize(pdu?.unwrap().as_ref())?;
-            if query.matches(&pdu) {
+            let pdu: StoredPdu = DefaultOptions::new().deserialize(pdu?.unwrap().as_ref())?;
+            if query.matches(&pdu.inner()) {
                 ret.push(pdu);
             }
         }
@@ -386,13 +381,13 @@ impl Storage for SledStorageHandle {
         Ok(())
     }
 
-    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error> {
+    async fn add_pdus(&self, pdus: &[StoredPdu]) -> Result<(), Error> {
         for pdu in pdus {
-            let name = format!("{}_{}", pdu.room_id, pdu.event_id());
+            let name = format!("{}_{}", pdu.room_id(), pdu.event_id());
             dbg!();
             self.events.try_insert_value(name, pdu)?;
             dbg!();
-            let ordering_tree = self.get_room_ordering_tree(&pdu.room_id).await?;
+            let ordering_tree = self.get_room_ordering_tree(&pdu.room_id()).await?;
             'cas: loop {
                 if let Some((key, _value)) = ordering_tree.last()? {
                     let idx = u32::from_be_bytes(key[0..4].try_into().unwrap());
@@ -414,12 +409,12 @@ impl Storage for SledStorageHandle {
                 dbg!();
                 use ConflictableTransactionError::Abort;
                 if let Some(mut old_depth) = txn.get_value::<_, Depth>("depth").map_err(Abort)? {
-                    if old_depth.depth > pdu.depth {
+                    if old_depth.depth > pdu.depth() {
                         // we are keeping track of the highest depth events. this event is lower
                         // than one that's already in there - so we don't do anything
                         return Ok(());
-                    } else if old_depth.depth == pdu.depth {
-                        old_depth.event_ids.insert(pdu.event_id());
+                    } else if old_depth.depth == pdu.depth() {
+                        old_depth.event_ids.insert(pdu.event_id().to_string());
                         txn.overwrite_value("depth", old_depth).map_err(Abort)?;
                         return Ok(());
                     }
@@ -427,10 +422,10 @@ impl Storage for SledStorageHandle {
                 // at this point, either there was no depth info, or the new pdu has greater depth,
                 // so we create a new entry
                 let new_depth = Depth {
-                    depth: pdu.depth,
+                    depth: pdu.depth(),
                     event_ids: {
                         let mut set = HashSet::new();
-                        set.insert(pdu.event_id());
+                        set.insert(pdu.event_id().to_string());
                         set
                     },
                 };
@@ -438,7 +433,7 @@ impl Storage for SledStorageHandle {
                 dbg!();
                 Ok(())
             });
-            self.rooms.insert(pdu.room_id.clone(), &[])?;
+            self.rooms.insert(pdu.room_id().clone(), &[])?;
         }
         Ok(())
     }
@@ -489,7 +484,7 @@ impl Storage for SledStorageHandle {
         &self,
         query: EventQuery<'a>,
         wait: bool,
-    ) -> Result<(Vec<PduV4>, usize), Error> {
+    ) -> Result<(Vec<StoredPdu>, usize), Error> {
         let ordering_tree = self.get_room_ordering_tree(&query.room_id).await?;
         if ordering_tree.is_empty() {
             return Err(ErrorKind::RoomNotFound.into());
@@ -522,7 +517,7 @@ impl Storage for SledStorageHandle {
             .map_err(Into::into)
     }
 
-    async fn get_pdu(&self, room_id: &str, event_id: &str) -> Result<Option<PduV4>, Error> {
+    async fn get_pdu(&self, room_id: &str, event_id: &str) -> Result<Option<StoredPdu>, Error> {
         self.events
             .get_value(&format!("{}_{}", room_id, event_id))
             .map_err(Into::into)

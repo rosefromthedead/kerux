@@ -7,12 +7,7 @@ use std::{
 use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
-use crate::{
-    error::{Error, ErrorKind},
-    events::{ephemeral::Typing, room::Membership, Event, EventContent, PduV4, UnhashedPdu},
-    storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile},
-    util::MatrixId,
-};
+use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, UnhashedPdu, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
 
 struct MemStorage {
     rooms: HashMap<String, Room>,
@@ -24,7 +19,7 @@ struct MemStorage {
 
 #[derive(Debug)]
 struct Room {
-    events: Vec<PduV4>,
+    events: Vec<StoredPdu>,
     ephemeral: HashMap<String, JsonValue>,
     typing: HashMap<MatrixId, Instant>,
     notify_send: Sender<()>,
@@ -183,20 +178,20 @@ impl Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error> {
+    async fn add_pdus(&self, pdus: &[StoredPdu]) -> Result<(), Error> {
         let mut db = self.inner.write().await;
         for pdu in pdus {
-            match pdu.event_content {
+            match pdu.event_content() {
                 EventContent::Create(_) => {
                     db.rooms.insert(
-                        pdu.room_id.clone(),
+                        pdu.room_id().to_string(),
                         Room::new(),
                     );
                 }
                 _ => {},
             }
             db.rooms
-                .get_mut(&pdu.room_id)
+                .get_mut(pdu.room_id())
                 .ok_or(ErrorKind::RoomNotFound)?
                 .events
                 .push(pdu.clone());
@@ -251,7 +246,7 @@ impl Storage for MemStorageHandle {
         &self,
         query: EventQuery<'a>,
         wait: bool,
-    ) -> Result<(Vec<PduV4>, usize), Error> {
+    ) -> Result<(Vec<StoredPdu>, usize), Error> {
         let mut ret = Vec::new();
         let (mut from, mut to) = match &query.query_type {
             &QueryType::Timeline { from, to } => {
@@ -272,7 +267,7 @@ impl Storage for MemStorageHandle {
         if let Some(range) = room.events.get(from..=to.unwrap()) {
             ret.extend(
                 range.iter()
-                .filter(|pdu| query.matches(&pdu))
+                .filter(|pdu| query.matches(&pdu.inner()))
                 .cloned());
         }
 
@@ -302,7 +297,7 @@ impl Storage for MemStorageHandle {
         if let Some(range) = room.events.get(from..=to.unwrap()) {
             ret.extend(
                 range.iter()
-                .filter(|pdu| query.matches(&pdu))
+                .filter(|pdu| query.matches(&pdu.inner()))
                 .cloned());
         }
 
@@ -311,7 +306,7 @@ impl Storage for MemStorageHandle {
             let mut seen = HashSet::new();
             // remove pdus that are older than another pdu with the same state key
             ret.retain(|pdu| {
-                seen.insert(pdu.state_key.clone().unwrap())
+                seen.insert(pdu.state_key().to_string().unwrap())
             });
             ret.reverse();
         }
@@ -328,12 +323,12 @@ impl Storage for MemStorageHandle {
         &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<PduV4>, Error> {
+    ) -> Result<Option<StoredPdu>, Error> {
         let db = self.inner.read().await;
         let event = db
             .rooms
             .get(room_id)
-            .map(|r| r.events.iter().find(|e| e.hashes.sha256 == event_id))
+            .map(|r| r.events.iter().find(|e| e.event_id() == event_id))
             .flatten()
             .cloned();
         Ok(event)

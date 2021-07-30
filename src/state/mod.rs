@@ -1,6 +1,6 @@
 use std::{borrow::Cow, cmp::Ordering, collections::{HashMap, HashSet}, convert::TryInto, sync::{Arc, Mutex}};
 
-use crate::{error::Error, events::{EventContent, EventType, PduV4, room::{Member, Membership}}, storage::Storage};
+use crate::{error::Error, events::{EventContent, EventType, PduV4, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
 
 use super::StorageExt;
 
@@ -21,15 +21,15 @@ impl State {
         if let Some(event_id) = self.get((T::EVENT_TYPE, state_key)) {
             let event = db.get_pdu(&self.room_id, &event_id).await?
                 .expect("event in state doesn't exist");
-            return Ok(Some(event.event_content.try_into().map_err(|_| ()).unwrap()))
+            return Ok(Some(event.event_content().try_into().map_err(|_| ()).unwrap()))
         }
         Ok(None)
     }
 
-    pub fn insert_event(&mut self, pdu: &PduV4) {
+    pub fn insert_event(&mut self, pdu: &VersionedPdu) {
         self.map.insert(
-            (Cow::from(pdu.event_content.get_type().to_string()), Cow::from(pdu.state_key.clone().unwrap())),
-            pdu.event_id().clone()
+            (Cow::from(pdu.event_content().get_type().to_string()), Cow::from(pdu.state_key().unwrap().to_string())),
+            pdu.event_id().to_string()
         );
     }
 }
@@ -48,13 +48,13 @@ impl StateResolver {
         }
     }
 
-    pub async fn resolve(&self, room_id: &str, event: &PduV4) -> Result<State, Error> {
+    pub async fn resolve(&self, room_id: &str, event: &VersionedPdu) -> Result<(State, AuthStatus), Error> {
         self.resolve_v2(room_id, event).await
     }
 
     #[async_recursion::async_recursion]
-    pub async fn resolve_v2(&self, room_id: &str, event: &PduV4) -> Result<State, Error> {
-        let prev_event_ids = &event.prev_events;
+    pub async fn resolve_v2(&self, room_id: &str, event: &VersionedPdu) -> Result<(State, AuthStatus), Error> {
+        let prev_event_ids = &event.prev_events();
 
         // event_id -> state
         let mut scratch = HashMap::new();
@@ -62,7 +62,7 @@ impl StateResolver {
         // get as many entries from the cache as possible
         {
             let cache = self.cache.lock().unwrap();
-            for event_id in prev_event_ids {
+            for event_id in prev_event_ids.iter() {
                 if let Some(state) = cache.get(event_id) {
                     scratch.insert(event_id.to_string(), state.clone());
                 }
@@ -70,12 +70,12 @@ impl StateResolver {
         }
 
         // fill in the gaps - in a separate loop so we don't lock for long
-        for event_id in prev_event_ids {
+        for event_id in prev_event_ids.iter() {
             if scratch.contains_key(event_id) {
                 continue;
             }
             let prev_event = self.db.get_pdu(room_id, &event_id).await?.unwrap();
-            let state = self.resolve_v2(room_id, &prev_event).await?;
+            let (state, _) = self.resolve_v2(room_id, &prev_event.inner()).await?;
             scratch.insert(event_id.clone(), state);
         }
 
@@ -115,7 +115,7 @@ impl StateResolver {
         let mut power_events = HashSet::new();
         for event_id in full_conflicted_set.iter() {
             let event = self.db.get_pdu(room_id, event_id).await?.unwrap();
-            if is_power_event(&event) {
+            if is_power_event(&event.inner()) {
                 power_events.insert(event_id.clone());
             }
         }
@@ -133,30 +133,31 @@ impl StateResolver {
 
         for event_id in events_list {
             let event = self.db.get_pdu(room_id, &event_id).await?.expect("event not found");
-            if let Some(state_key) = &event.state_key {
-                let auth_event_keys_needed = auth_types_for_event(&event);
+            if let Some(state_key) = &event.state_key() {
+                let auth_event_keys_needed = auth_types_for_event(&event.inner());
                 let mut frankenstate = State {
                     room_id: String::from(room_id),
                     map: HashMap::new(),
                 };
-                for auth_event_id in event.auth_events.iter() {
+                for auth_event_id in event.auth_events().iter() {
                     let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
-                    // TODO: check whether it is rejected
-                    frankenstate.insert_event(&auth_event);
+                    if auth_event.did_pass_auth() {
+                        frankenstate.insert_event(auth_event.inner());
+                    }
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await?;
-                partially_resolved_state.insert((Cow::from(event.event_content.get_type().to_string()), Cow::from(state_key.clone())), event_id.clone());
+                crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
+                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key.clone())), event_id.clone());
             }
         }
 
         // STEP 3
         // mainline ordering D:
 
-        let get_power_levels = |event: PduV4| async move {
-            for auth_event_id in event.auth_events.iter() {
+        let get_power_levels = |event: &VersionedPdu| async move {
+            for auth_event_id in event.auth_events().iter() {
                 let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
-                match auth_event.event_content {
+                match auth_event.event_content() {
                     EventContent::PowerLevels(_) =>
                         return Result::<Option<String>, Error>::Ok(Some(auth_event_id.clone())),
                     _ => continue,
@@ -171,7 +172,7 @@ impl StateResolver {
             .get(&(Cow::from("m.room.power_levels"), Cow::from(""))).expect("oh no");
         let mut mainline = vec![mainline_starting_point.clone()];
         let mut current = mainline_starting_point.clone();
-        while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap()).await? {
+        while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap().inner()).await? {
             mainline.push(parent.clone());
             current = parent;
         }
@@ -186,7 +187,7 @@ impl StateResolver {
                 }
 
                 let current_event = self.db.get_pdu(room_id, &current).await?.unwrap();
-                match get_power_levels(current_event).await? {
+                match get_power_levels(current_event.inner()).await? {
                     Some(id) => current = id.clone(),
                     None => break 'inner std::usize::MAX,
                 }
@@ -202,20 +203,21 @@ impl StateResolver {
         // iterative auth checks again
 
         for (event, _) in events_with_closest_mainlines.into_iter() {
-            if let Some(state_key) = &event.state_key {
-                let auth_event_keys_needed = auth_types_for_event(&event);
+            if let Some(state_key) = &event.state_key() {
+                let auth_event_keys_needed = auth_types_for_event(&event.inner());
                 let mut frankenstate = State {
                     room_id: String::from(room_id),
                     map: HashMap::new(),
                 };
-                for auth_event_id in event.auth_events.iter() {
+                for auth_event_id in event.auth_events().iter() {
                     let auth_event = self.db.get_pdu(room_id, &auth_event_id).await?.unwrap();
-                    // TODO: check whether it is rejected
-                    frankenstate.insert_event(&auth_event);
+                    if auth_event.did_pass_auth() {
+                        frankenstate.insert_event(auth_event.inner());
+                    }
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await?;
-                partially_resolved_state.insert((Cow::from(event.event_content.get_type().to_string()), Cow::from(state_key.clone())), event.event_id().clone());
+                crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
+                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key.clone())), event.event_id().to_string());
             }
         }
 
@@ -225,10 +227,19 @@ impl StateResolver {
             partially_resolved_state.insert(type_and_key, event_id);
         }
 
-        Ok(State {
+        // STEP 6 woah where did that come from?
+        // (consider the event itself)
+
+        let mut ret = State {
             room_id: room_id.to_string(),
             map: partially_resolved_state,  // not partially anymore lmao
-        })
+        };
+        let auth_status = crate::validate::auth::auth_check_v1(&*self.db, &event, &ret).await?;
+        if event.state_key().is_some() && auth_status.is_pass() {
+            ret.insert_event(&event);
+        }
+
+        Ok((ret, auth_status))
     }
 
     async fn auth_chains(&self, room_id: &str, event_ids: &[String]) -> Result<HashSet<String>, Error> {
@@ -238,11 +249,11 @@ impl StateResolver {
         while !to_check.is_empty() {
             let event_id = to_check.pop().unwrap();
             let pdu = self.db.get_pdu(room_id, &event_id).await?.expect("event not found");
-            for auth_event_id in pdu.auth_events {
-                if !ret.contains(&auth_event_id) {
+            for auth_event_id in pdu.auth_events() {
+                if !ret.contains(auth_event_id) {
                     to_check.push(auth_event_id.clone());
                 }
-                ret.insert(auth_event_id);
+                ret.insert(auth_event_id.clone());
             }
         }
 
@@ -285,7 +296,7 @@ impl StateResolver {
             // get the events in the graph with no parents
             'outer: for (id1, event1) in events.iter() {
                 for (_id2, event2) in events.iter() {
-                    if event2.auth_events.contains(&id1) {
+                    if event2.auth_events().contains(&id1) {
                         continue 'outer;
                     }
                 }
@@ -294,7 +305,7 @@ impl StateResolver {
 
             let mut sender_power_levels = HashMap::new();
             for event in candidates.iter() {
-                let power_level = self.db.get_sender_power_level(&event.room_id, &event.event_id()).await?;
+                let power_level = self.db.get_sender_power_level(&event.room_id(), &event.event_id()).await?;
                 sender_power_levels.insert(event.event_id(), power_level);
             }
 
@@ -306,7 +317,7 @@ impl StateResolver {
                     return power_level_ordering;
                 }
 
-                let ts_ordering = a.origin_server_ts.cmp(&b.origin_server_ts);
+                let ts_ordering = a.origin_server_ts().cmp(&b.origin_server_ts());
                 if ts_ordering != Ordering::Equal {
                     return ts_ordering;
                 }
@@ -315,35 +326,35 @@ impl StateResolver {
                 return a.event_id().cmp(&b.event_id());
             });
 
-            ret.extend(candidates.drain(..).map(|pdu| pdu.event_id()));
+            ret.extend(candidates.drain(..).map(|pdu| pdu.event_id().to_string()));
         }
 
         Ok(ret)
     }
 }
 
-fn is_power_event(pdu: &PduV4) -> bool {
-    match pdu.event_content {
+fn is_power_event(pdu: &VersionedPdu) -> bool {
+    match pdu.event_content() {
         EventContent::PowerLevels(_) | EventContent::JoinRules(_) => true,
         EventContent::Member(Member { membership: Membership::Leave, .. }) |
             EventContent::Member(Member { membership: Membership::Ban, .. })
-            if pdu.state_key.as_deref() != Some(pdu.sender.as_str()) => true,
+            if pdu.state_key().as_deref() != Some(pdu.sender().as_str()) => true,
         _ => false,
     }
 }
 
-fn auth_types_for_event(pdu: &PduV4) -> HashSet<(&str, &str)> {
+fn auth_types_for_event(pdu: &VersionedPdu) -> HashSet<(&str, &str)> {
     let mut ret = HashSet::new();
-    if pdu.event_content.get_type() == "m.room.create" {
+    if pdu.event_content().get_type() == "m.room.create" {
         return ret;
     }
 
     ret.insert(("m.room.create", ""));
-    ret.insert(("m.room.member", &pdu.sender.as_str()));
+    ret.insert(("m.room.member", &pdu.sender().as_str()));
     ret.insert(("m.room.power_levels", ""));
 
-    if let EventContent::Member(ref member) = pdu.event_content {
-        ret.insert(("m.room.member", pdu.state_key.as_ref().unwrap()));
+    if let EventContent::Member(ref member) = pdu.event_content() {
+        ret.insert(("m.room.member", pdu.state_key().as_ref().unwrap()));
 
         let membership = &member.membership;
         if *membership == Membership::Join || *membership == Membership::Invite {
@@ -356,7 +367,7 @@ fn auth_types_for_event(pdu: &PduV4) -> HashSet<(&str, &str)> {
     ret
 }
 
-fn mainline_cmp(x: &(PduV4, usize), y: &(PduV4, usize)) -> Ordering {
+fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
     // list is sorted backwards
     let mainline_based_order = x.1.cmp(&y.1).reverse();
     if mainline_based_order.is_ne() {
@@ -364,7 +375,7 @@ fn mainline_cmp(x: &(PduV4, usize), y: &(PduV4, usize)) -> Ordering {
     }
 
     // time, however, is not
-    let ts_based_order = x.0.origin_server_ts.cmp(&y.0.origin_server_ts);
+    let ts_based_order = x.0.origin_server_ts().cmp(&y.0.origin_server_ts());
     if ts_based_order.is_ne() {
         return ts_based_order;
     }

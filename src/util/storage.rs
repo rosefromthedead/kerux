@@ -88,11 +88,11 @@ impl<'a> StorageExt for dyn Storage + 'a {
     async fn get_sender_power_level(&self, room_id: &str, event_id: &str) -> Result<u32, Error> {
         let event = self.get_pdu(room_id, event_id).await?.expect("event not found");
         let mut create_event_content = None;
-        for auth_event_id in event.auth_events.iter() {
+        for auth_event_id in event.auth_events().iter() {
             let auth_event = self.get_pdu(room_id, auth_event_id).await?.expect("event not found");
-            match auth_event.event_content {
+            match auth_event.event_content() {
                 EventContent::PowerLevels(levels) => {
-                    return Ok(levels.get_user_level(&event.sender));
+                    return Ok(levels.get_user_level(event.sender()));
                 },
                 EventContent::Create(create) => {
                     create_event_content = Some(create);
@@ -102,7 +102,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
         }
 
         // at this point there is no power levels event
-        if event.sender == create_event_content.expect("event has no create in auth").creator {
+        if *event.sender() == create_event_content.expect("event has no create in auth").creator {
             return Ok(100);
         } else {
             return Ok(0);
