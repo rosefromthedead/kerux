@@ -5,14 +5,7 @@ use serde_json::Value as JsonValue;
 use std::collections::{HashSet, HashMap};
 use uuid::Uuid;
 
-use crate::{
-    error::Error,
-    events::{
-        room::Membership,
-        Event, EventContent, PduV4,
-    },
-    util::MatrixId,
-};
+use crate::{error::Error, events::{Event, EventContent, pdu::StoredPdu, room::Membership, room_version::VersionedPdu}, util::MatrixId};
 
 #[cfg(feature = "storage-mem")]
 pub mod mem;
@@ -68,17 +61,17 @@ pub enum QueryType<'a> {
 }
 
 impl<'a> EventQuery<'a> {
-    pub fn matches(&self, pdu: &PduV4) -> bool {
+    pub fn matches(&self, pdu: &VersionedPdu) -> bool {
         // We don't have access to the event's ordering in storage, so we can't test whether it
         // exists within the bounds specified in Timeline/State. Therefore we just assume it does.
         match self.query_type {
             QueryType::State { state_keys, not_state_keys, .. } => {
-                match &pdu.state_key {
+                match &pdu.state_key() {
                     Some(k) => {
-                        if not_state_keys.contains(&k.as_str()) {
+                        if not_state_keys.contains(k) {
                             return false;
                         }
-                        if !state_keys.is_empty() && !state_keys.contains(&k.as_str()) {
+                        if !state_keys.is_empty() && !state_keys.contains(k) {
                             return false;
                         }
                     },
@@ -89,24 +82,24 @@ impl<'a> EventQuery<'a> {
             QueryType::Timeline { .. } => {},
         }
 
-        if self.not_senders.contains(&&pdu.sender) {
+        if self.not_senders.contains(&pdu.sender()) {
             return false;
         }
-        if !self.senders.is_empty() && !self.senders.contains(&&pdu.sender) {
+        if !self.senders.is_empty() && !self.senders.contains(&pdu.sender()) {
             return false;
         }
 
-        if self.not_types.contains(&pdu.event_content.get_type()) {
+        if self.not_types.contains(&pdu.event_content().get_type()) {
             return false;
         }
-        if !self.types.is_empty() && !self.types.contains(&pdu.event_content.get_type()) {
+        if !self.types.is_empty() && !self.types.contains(&pdu.event_content().get_type()) {
             return false;
         }
 
         if let Some(ref value) = self.contains_json {
             let map = value.as_object().expect("contains_json must be an object");
             for (key, value) in map.iter() {
-                if pdu.event_content.content_as_json().get(key) != Some(value) {
+                if pdu.event_content().content_as_json().get(key) != Some(value) {
                     return false;
                 }
             }
@@ -189,7 +182,7 @@ pub trait Storage: Send + Sync {
         display_name: &str,
     ) -> Result<(), Error>;
 
-    async fn add_pdus(&self, pdus: &[PduV4]) -> Result<(), Error>;
+    async fn add_pdus(&self, pdus: &[StoredPdu]) -> Result<(), Error>;
 
     /// Adds the given event to the head of the room, *without* checking any of the following:
     /// * whether the event's contents are valid
@@ -209,7 +202,7 @@ pub trait Storage: Send + Sync {
         &self,
         query: EventQuery<'a>,
         wait: bool,
-    ) -> Result<(Vec<PduV4>, usize), Error>;
+    ) -> Result<(Vec<StoredPdu>, usize), Error>;
 
     async fn query_events<'a>(
         &self,
@@ -217,7 +210,7 @@ pub trait Storage: Send + Sync {
         wait: bool,
     ) -> Result<(Vec<Event>, usize), Error> {
         let (pdus, next_batch) = self.query_pdus(query, wait).await?;
-        return Ok((pdus.into_iter().map(PduV4::to_client_format).collect(), next_batch));
+        return Ok((pdus.into_iter().map(StoredPdu::to_client_format).collect(), next_batch));
     }
 
     async fn get_rooms(&self) -> Result<Vec<String>, Error>;
@@ -325,7 +318,7 @@ pub trait Storage: Send + Sync {
         &self,
         room_id: &str,
         event_id: &str,
-    ) -> Result<Option<PduV4>, Error>;
+    ) -> Result<Option<StoredPdu>, Error>;
 
     async fn get_all_ephemeral(
         &self,
