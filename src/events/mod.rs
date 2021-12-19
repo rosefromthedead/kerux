@@ -190,8 +190,5 @@ pub struct Event {
     pub redacts: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_id: Option<String>,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_server_ts: Option<i64>,
 }

@@ -29,6 +29,7 @@ pub enum MxidError {
 
 impl MatrixId {
     pub fn new(localpart: &str, domain: &str) -> Result<Self, MxidError> {
+        Self::validate_parts(localpart, domain)?;
         Ok(MatrixId(format!("@{}:{}", localpart, domain)))
     }
 
