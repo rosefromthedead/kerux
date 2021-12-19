@@ -7,16 +7,9 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    client::auth::AccessToken,
-    error::{Error, ErrorKind},
-    events::{
+use crate::{ServerState, client::auth::AccessToken, error::{Error, ErrorKind}, events::{
         room, Event, EventContent, UnhashedPdu,
-    },
-    storage::{Storage, StorageManager, UserProfile},
-    util::{MatrixId, StorageExt},
-    ServerState,
-};
+    }, storage::{Storage, StorageManager, UserProfile}, util::{MatrixId, StorageExt, storage::NewEvent}};
 
 #[derive(Deserialize)]
 pub struct CreateRoomRequest {
@@ -88,28 +81,20 @@ pub async fn create_room(
     let mut events = Vec::new();
     let now = chrono::Utc::now().timestamp_millis();
 
-    let room_create = room::Create {
-        creator: user_id.clone(),
-        room_version: Some(room_version),
-        predecessor: None,
-        extra: match req.creation_content {
-            Some(v) => v,
-            None => HashMap::new(),
-        },
-    };
-    let room_create_event = UnhashedPdu {
-        event_content: EventContent::Create(room_create),
-        room_id: room_id.clone(),
+    db.add_event(&room_id, NewEvent {
+        event_content: EventContent::Create(room::Create {
+            creator: user_id.clone(),
+            room_version: Some(room_version),
+            predecessor: None,
+            extra: match req.creation_content {
+                Some(v) => v,
+                None => HashMap::new(),
+            },
+        }),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(String::new()),
-        prev_events: Vec::new(),
-        depth: 0,
-        auth_events: Vec::new(),
         redacts: None,
-        unsigned: None,
-    }.finalize();
+    });
 
     let creator_join = {
         let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
@@ -120,35 +105,21 @@ pub async fn create_room(
             is_direct,
         }
     };
-    let creator_join_event = UnhashedPdu {
+    db.add_event(&room_id, NewEvent {
         event_content: EventContent::Member(creator_join),
-        room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(user_id.clone_inner()),
-        prev_events: vec![room_create_event.hashes.sha256.clone()],
-        depth: 1,
-        auth_events: Vec::new(),
         redacts: None,
-        unsigned: None,
-    }.finalize();
+    });
 
-    let power_levels_event = UnhashedPdu {
+    // TODO: default power levels a bit of a mess
+    db.add_event(&room_id, NewEvent {
         event_content: EventContent::PowerLevels(
             req.power_level_content_override.unwrap_or_default()),
-        room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(String::new()),
-        prev_events: vec![creator_join_event.hashes.sha256.clone()],
-        depth: 2,
-        auth_events: Vec::new(),
         redacts: None,
-        unsigned: None,
-    }.finalize();
-    let power_levels_event_hash = power_levels_event.hashes.sha256.clone();
+    });
 
     let (join_rule, history_visibility, guest_access) = {
         use room::{JoinRule::*, HistoryVisibilityType::*, GuestAccessType::*};
@@ -161,137 +132,67 @@ pub async fn create_room(
             Preset::PublicChat => (Public, Shared, Forbidden),
         }
     };
-    let join_rules_event = UnhashedPdu {
+    db.add_event(&room_id, NewEvent {
         event_content: EventContent::JoinRules(room::JoinRules { join_rule }),
-        room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(String::new()),
-        prev_events: vec![power_levels_event_hash.clone()],
-        depth: 3,
-        auth_events: vec![power_levels_event_hash.clone()],
         redacts: None,
-        unsigned: None,
-    }.finalize();
-    let history_visibility_event = UnhashedPdu {
+    });
+    db.add_event(&room_id, NewEvent {
         event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
             history_visibility
         }),
-        room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(String::new()),
-        prev_events: vec![join_rules_event.hashes.sha256.clone()],
-        depth: 4,
-        auth_events: vec![power_levels_event_hash.clone()],
         redacts: None,
-        unsigned: None,
-    }.finalize();
-    let guest_access_event = UnhashedPdu {
+    });
+    db.add_event(&room_id, NewEvent {
         event_content: EventContent::GuestAccess(room::GuestAccess { guest_access }),
-        room_id: room_id.clone(),
         sender: user_id.clone(),
-        origin: state.config.domain.clone(),
-        origin_server_ts: now,
         state_key: Some(String::new()),
-        prev_events: vec![history_visibility_event.hashes.sha256.clone()],
-        depth: 5,
-        auth_events: vec![power_levels_event_hash.clone()],
         redacts: None,
-        unsigned: None,
-    }.finalize();
-
-    events.push(room_create_event);
-    events.push(creator_join_event);
-    events.push(power_levels_event);
-    events.push(join_rules_event);
-    events.push(history_visibility_event);
-    events.push(guest_access_event);
+    });
 
     for event in req.initial_state.into_iter().flatten() {
-        let depth = events.len();
-        events.push(
-            UnhashedPdu {
-                event_content: EventContent::new(&event.ty, event.content)?,
-                room_id: room_id.clone(),
-                sender: user_id.clone(),
-                origin: state.config.domain.clone(),
-                origin_server_ts: now,
-                state_key: Some(event.state_key),
-                prev_events: vec![events[depth - 1].hashes.sha256.clone()],
-                depth: depth as i64,
-                auth_events: vec![power_levels_event_hash.clone()],
-                redacts: None,
-                unsigned: None,
-            }.finalize()
-        );
+        db.add_event(&room_id, NewEvent {
+            event_content: EventContent::new(&event.ty, event.content)?,
+            sender: user_id.clone(),
+            state_key: Some(event.state_key),
+            redacts: None,
+        });
     }
 
     if let Some(name) = req.name {
-        let depth = events.len();
-        events.push(
-            UnhashedPdu {
-                event_content: EventContent::Name(room::Name { name }),
-                room_id: room_id.clone(),
-                sender: user_id.clone(),
-                origin: state.config.domain.clone(),
-                origin_server_ts: now,
-                state_key: Some(String::new()),
-                prev_events: vec![events[depth - 1].hashes.sha256.clone()],
-                depth: depth as i64,
-                auth_events: vec![power_levels_event_hash.clone()],
-                redacts: None,
-                unsigned: None,
-            }.finalize()
-        );
+        db.add_event(&room_id, NewEvent {
+            event_content: EventContent::Name(room::Name { name }),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+        });
     }
 
     if let Some(topic) = req.topic {
-        let depth = events.len();
-        events.push(
-            UnhashedPdu {
-                event_content: EventContent::Topic(room::Topic { topic }),
-                room_id: room_id.clone(),
-                sender: user_id.clone(),
-                origin: state.config.domain.clone(),
-                origin_server_ts: now,
-                state_key: Some(String::new()),
-                prev_events: vec![events[depth - 1].hashes.sha256.clone()],
-                depth: depth as i64,
-                auth_events: vec![power_levels_event_hash.clone()],
-                redacts: None,
-                unsigned: None,
-            }.finalize()
-        );
+        db.add_event(&room_id, NewEvent {
+            event_content: EventContent::Topic(room::Topic { topic }),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+        });
     }
 
     for invitee in req.invite.into_iter().flatten() {
-        let depth = events.len();
-        events.push(
-            UnhashedPdu {
-                event_content: EventContent::Member(room::Member {
-                    avatar_url: None,
-                    displayname: None,
-                    membership: room::Membership::Invite,
-                    is_direct,
-                }),
-                room_id: room_id.clone(),
-                sender: user_id.clone(),
-                origin: state.config.domain.clone(),
-                origin_server_ts: now,
-                state_key: Some(invitee),
-                prev_events: vec![events[depth - 1].hashes.sha256.clone()],
-                depth: depth as i64,
-                auth_events: vec![power_levels_event_hash.clone()],
-                redacts: None,
-                unsigned: None,
-            }.finalize()
-        );
+        db.add_event(&room_id, NewEvent {
+            event_content: EventContent::Member(room::Member {
+                avatar_url: None,
+                displayname: None,
+                membership: room::Membership::Invite,
+                is_direct,
+            }),
+            sender: user_id.clone(),
+            state_key: Some(invitee),
+            redacts: None,
+        });
     }
-
-    db.add_pdus(&events).await?;
 
     tracing::info!(room_id = room_id.as_str(), "Created room");
 

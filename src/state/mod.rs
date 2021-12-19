@@ -1,6 +1,6 @@
-use std::{borrow::Cow, cmp::Ordering, collections::{HashMap, HashSet}, convert::TryInto, sync::{Arc, Mutex}};
+use std::{borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, convert::TryInto, iter::FromIterator, sync::{Arc, Mutex}};
 
-use crate::{error::Error, events::{EventContent, EventType, PduV4, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
+use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
 
 use super::StorageExt;
 
@@ -35,8 +35,9 @@ impl State {
 }
 
 pub struct StateResolver {
-    /// event_id -> state after that event S'(E)
-    cache: Arc<Mutex<HashMap<String, State>>>,
+    /// [event_id] -> state after those events res({S'(E1), S'(E2)})
+    cache: Arc<Mutex<HashMap<BTreeSet<String>, State>>>,
+    // TODO: do we want to keep this around, or pass it by function arguments?
     db: Box<dyn Storage>,
 }
 
@@ -48,13 +49,21 @@ impl StateResolver {
         }
     }
 
-    pub async fn resolve(&self, room_id: &str, event: &VersionedPdu) -> Result<(State, AuthStatus), Error> {
-        self.resolve_v2(room_id, event).await
+    pub async fn resolve(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
+        self.resolve_v2(room_id, events).await
     }
 
     #[async_recursion::async_recursion]
-    pub async fn resolve_v2(&self, room_id: &str, event: &VersionedPdu) -> Result<(State, AuthStatus), Error> {
-        let prev_event_ids = &event.prev_events();
+    pub async fn resolve_v2(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
+        if events.len() == 1 {
+            let event = self.db.get_pdu(room_id, &events[0]).await?.unwrap();
+            let mut state = self.resolve_v2(room_id, event.prev_events()).await?;
+            if event.did_pass_auth() && event.state_key().is_some() {
+                state.insert_event(&event.inner());
+            }
+            self.cache.lock().unwrap().insert(BTreeSet::from_iter([events[0].clone()]), state.clone());
+            return Ok(state);
+        }
 
         // event_id -> state
         let mut scratch = HashMap::new();
@@ -62,20 +71,19 @@ impl StateResolver {
         // get as many entries from the cache as possible
         {
             let cache = self.cache.lock().unwrap();
-            for event_id in prev_event_ids.iter() {
-                if let Some(state) = cache.get(event_id) {
+            for event_id in events.iter() {
+                if let Some(state) = cache.get(&BTreeSet::from_iter([event_id.clone()])) {
                     scratch.insert(event_id.to_string(), state.clone());
                 }
             }
         }
 
         // fill in the gaps - in a separate loop so we don't lock for long
-        for event_id in prev_event_ids.iter() {
+        for event_id in events.iter() {
             if scratch.contains_key(event_id) {
                 continue;
             }
-            let prev_event = self.db.get_pdu(room_id, &event_id).await?.unwrap();
-            let (state, _) = self.resolve_v2(room_id, &prev_event.inner()).await?;
+            let state = self.resolve_v2(room_id, &[event_id.clone()]).await?;
             scratch.insert(event_id.clone(), state);
         }
 
@@ -104,7 +112,7 @@ impl StateResolver {
             }
         }
 
-        let auth_difference = self.auth_difference(room_id, prev_event_ids).await?;
+        let auth_difference = self.auth_difference(room_id, events).await?;
         let mut full_conflicted_set = conflicted_state_set.union(&auth_difference).map(Clone::clone).collect::<HashSet<_>>();
 
         // The spec says we're also supposed to take all the events from these events' auth chains
@@ -227,19 +235,10 @@ impl StateResolver {
             partially_resolved_state.insert(type_and_key, event_id);
         }
 
-        // STEP 6 woah where did that come from?
-        // (consider the event itself)
-
-        let mut ret = State {
+        Ok(State {
             room_id: room_id.to_string(),
             map: partially_resolved_state,  // not partially anymore lmao
-        };
-        let auth_status = crate::validate::auth::auth_check_v1(&*self.db, &event, &ret).await?;
-        if event.state_key().is_some() && auth_status.is_pass() {
-            ret.insert_event(&event);
-        }
-
-        Ok((ret, auth_status))
+        })
     }
 
     async fn auth_chains(&self, room_id: &str, event_ids: &[String]) -> Result<HashSet<String>, Error> {
@@ -386,4 +385,38 @@ fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
     }
 
     panic!("oh come on now");
+}
+
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::Create, EventContent}};
+
+    use super::StateResolver;
+
+    async fn construct_cursed_room(db: &dyn Storage, resolver: &StateResolver) -> Result<(), Error> {
+        let room_id = "!cursed:example.org";
+        let alice = MatrixId::new("alice", "example.org")?;
+        db.add_event(room_id, NewEvent { event_content: EventContent::Create(Create {
+            creator: alice,
+            room_version: Some(String::from("4")),
+            predecessor: None,
+            extra: HashMap::new(),
+        }), sender: alice, state_key: Some(String::new()), redacts: None }, resolver).await?;
+        Ok(())
+    }
+
+    #[test]
+    fn simple() {
+        let rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        rt.block_on(simple_inner()).unwrap();
+    }
+
+    async fn simple_inner() -> Result<(), Error> {
+        let storage_manager = crate::storage::mem::MemStorageManager::new();
+        let db = storage_manager.get_handle().await?;
+        let state_resolver = StateResolver::new(storage_manager.get_handle().await?);
+        db.add_pdus();
+        Ok(())
+    }
 }

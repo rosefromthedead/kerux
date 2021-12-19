@@ -3,7 +3,14 @@ use displaydoc::Display;
 use enum_extract::extract;
 use std::convert::TryInto;
 
-use crate::{error::Error, events::{Event, EventContent, room}, storage::Storage, util::MxidError};
+use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, room::{self, Membership}, room_version::VersionedPdu}, state::StateResolver, storage::Storage, util::{MatrixId, MxidError}};
+
+pub struct NewEvent {
+    pub event_content: EventContent,
+    pub sender: MatrixId,
+    pub state_key: Option<String>,
+    pub redacts: Option<String>,
+}
 
 #[derive(Debug, Display)]
 pub enum AddEventError {
@@ -25,7 +32,9 @@ pub enum AddEventError {
 pub trait StorageExt {
     async fn add_event(
         &self,
-        event: Event,
+        room_id: &str,
+        event: NewEvent,
+        state_resolver: &StateResolver,
     ) -> Result<String, Error>;
 
     async fn get_sender_power_level(&self, room_id: &str, event_id: &str) -> Result<u32, Error>;
@@ -37,50 +46,36 @@ pub trait StorageExt {
 impl<'a> StorageExt for dyn Storage + 'a {
     async fn add_event(
         &self,
-        event: Event,
+        room_id: &str,
+        event: NewEvent,
+        state_resolver: &StateResolver,
     ) -> Result<String, Error> {
-        let room_id = event.room_id.as_ref().unwrap();
-        let (power_levels, pl_event_id) = match self.get_state_event(room_id, "m.room.power_levels", "").await? {
-            Some(v) => (
-                extract!(EventContent::PowerLevels(_), v.event_content).unwrap(),
-                Some(v.event_id.unwrap().clone()),
-            ),
-            None => {
-                let create_event = self.get_state_event(room_id, "m.room.create", "").await?
-                    .ok_or(AddEventError::RoomNotFound)?; //TODO: what if we're adding create?
-                let create_content =
-                    extract!(EventContent::Create(_), create_event.event_content).unwrap();
-                (room::PowerLevels::no_event_default_levels(&create_content.creator), None)
-            },
-        };
-        // Validate event
-        match event.event_content {
-            EventContent::Member(_) => {
-                validate_member_event(self, &event, room_id, &power_levels).await?;
-            },
-            _ => {
-                let sender_membership = self.get_membership(&event.sender, room_id).await?;
-                if sender_membership != Some(room::Membership::Join) {
-                    return Err(AddEventError::UserNotInRoom.into());
-                }
-                let user_level = power_levels.get_user_level(&event.sender);
-                let event_level = power_levels.get_event_level(
-                    &event.event_content.get_type(),
-                    event.state_key.is_some(),
-                );
-                if user_level < event_level {
-                    return Err(AddEventError::InsufficientPowerLevel.into());
-                }
-            },
+        let prev_events = self.get_prev_events(room_id)?;
+        if let EventContent::Create(_) = event.event_content {
+            panic!("wrong function");
         }
+        let state = state_resolver.resolve(room_id, prev_events).await?;
 
-        let mut auth_events = Vec::with_capacity(1);
-        match pl_event_id {
-            Some(v) => auth_events.push(v),
-            None => {},
-        };
-        let event_id = self.add_event_unchecked(event, auth_events).await?;
-        Ok(event_id)
+        let mut auth_events = Vec::new();
+        auth_events.push(state.get(("m.room.create", "")).unwrap().to_string());
+        if let Some(power_levels_event) = state.get(("m.room.power_levels", "")) {
+            auth_events.push(power_levels_event.to_string());
+        }
+        if let Some(member_event) = state.get(("m.room.member", event.sender.as_str())) {
+            auth_events.push(member_event.to_string());
+        }
+        if let EventContent::Member(content) = &event.event_content {
+            if let Some(target_member_event) = state.get(("m.room.member", &event.state_key.unwrap())) {
+                auth_events.push(target_member_event.to_string());
+            }
+            if content.membership == Membership::Join
+                || content.membership == Membership::Invite {
+                if let Some(join_rules_event) = state.get(("m.room.join_rules", "")) {
+                    auth_events.push(join_rules_event.to_string());
+                }
+            }
+            // TODO: third party invites
+        }
     }
 
     //TODO: check return type
