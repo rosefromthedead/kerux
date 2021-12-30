@@ -307,6 +307,9 @@ impl Storage for SledStorageHandle {
         device_id: &str,
     ) -> Result<Uuid, Error> {
         let token = Uuid::new_v4();
+        if !self.users.contains_key(username)? {
+            return Err(ErrorKind::UserNotFound.into());
+        }
         self.access_tokens.try_insert_value(
             token.as_bytes(),
             &AccessTokenData {

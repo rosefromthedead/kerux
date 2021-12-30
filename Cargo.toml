@@ -5,7 +5,7 @@ authors = ["Rose Hudson <rose@krx.sh>"]
 edition = "2018"
 
 [features]
-default = ["storage-sled"]
+default = ["storage-mem", "storage-sled"]
 storage-mem = []
 storage-sled = ["sled", "bincode"]
 storage-postgres = ["tokio-postgres"]

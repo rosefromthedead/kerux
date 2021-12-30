@@ -15,9 +15,9 @@ pub enum VersionedPdu {
 
 /// Getter functions for all non-version-specific fields
 impl VersionedPdu {
-    pub fn event_content(&self) -> EventContent {
+    pub fn event_content(&self) -> &EventContent {
         match self {
-            VersionedPdu::V4(pdu) => pdu.event_content,
+            VersionedPdu::V4(pdu) => &pdu.event_content,
         }
     }
 

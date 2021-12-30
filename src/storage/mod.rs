@@ -345,3 +345,62 @@ pub trait Storage: Send + Sync {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Storage, StorageManager};
+
+    #[cfg(feature = "storage-mem")]
+    #[test]
+    fn mem_backend_user_accounts() {
+        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        let db_pool = super::mem::MemStorageManager::new();
+        rt.block_on(async {
+            let db = db_pool.get_handle().await.unwrap();
+            user_accounts(&*db).await;
+        });
+    }
+
+    #[cfg(feature = "storage-sled")]
+    #[test]
+    fn sled_backend_user_accounts() {
+        let _ = std::fs::remove_dir_all("sled-test-storage");
+        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        let db_pool = super::sled::SledStorage::new("sled-test-storage").unwrap();
+        rt.block_on(async {
+            let db = db_pool.get_handle().await.unwrap();
+            user_accounts(&*db).await;
+        });
+        let _ = std::fs::remove_dir_all("sled-test-storage");
+    }
+
+    async fn user_accounts(db: &dyn Storage) {
+        db.create_user("alice", "password1").await.expect("failed to create first user");
+        db.create_user("alice", "password1").await.expect_err("succeeded making same user twice");
+        db.create_user("alice", "password2").await.expect_err("succeeded making same user twice");
+        db.create_user("bob", "password1").await.expect("failed to create second user");
+
+        assert!(db.verify_password("alice", "password1").await.unwrap() == true);
+        assert!(db.verify_password("alice", "password2").await.unwrap() == false);
+        assert!(db.verify_password("bob", "password1").await.unwrap() == true);
+        assert!(db.verify_password("bob", "password2").await.unwrap() == false);
+
+        let alice_token_1 = db.create_access_token("alice", "phone").await.expect("failed to create token");
+        let alice_token_2 = db.create_access_token("alice", "laptop").await.expect("failed to create token");
+        let bob_token_1 = db.create_access_token("bob", "laptop").await.expect("failed to create token");
+        let bob_token_2 = db.create_access_token("bob", "phone").await.expect("failed to create token");
+        db.create_access_token("nobody", "kjfnkfn").await.expect_err("succeeded making token for nobody");
+
+        db.delete_access_token(alice_token_2).await.expect("failed to delete token");
+        db.delete_access_token(bob_token_2).await.expect("failed to delete token");
+
+        assert_eq!(db.try_auth(alice_token_1).await.expect("failed during auth").as_deref(), Some("alice"));
+        assert_eq!(db.try_auth(alice_token_2).await.expect("failed during auth").as_deref(), None);
+        assert_eq!(db.try_auth(bob_token_1).await.expect("failed during auth").as_deref(), Some("bob"));
+        assert_eq!(db.try_auth(bob_token_2).await.expect("failed during auth").as_deref(), None);
+
+        db.delete_all_access_tokens(alice_token_1).await.expect("failed to delete all tokens");
+        assert_eq!(db.try_auth(alice_token_1).await.expect("failed during auth").as_deref(), None);
+        assert_eq!(db.try_auth(bob_token_1).await.expect("failed during auth").as_deref(), Some("bob"));
+    }
+}
