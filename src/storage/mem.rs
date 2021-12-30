@@ -80,8 +80,10 @@ impl Storage for MemStorageHandle {
     async fn create_user(
         &self,
         username: &str,
-        password_hash: &str,
+        password: &str,
     ) -> Result<(), Error> {
+        let salt: [u8; 16] = rand::random();
+        let password_hash = argon2::hash_encoded(password.as_bytes(), &salt, &Default::default())?;
         let mut db = self.inner.write().await;
         db.users.push(User {
             username: username.to_string(),
