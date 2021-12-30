@@ -2,14 +2,17 @@ use async_trait::async_trait;
 use displaydoc::Display;
 use enum_extract::extract;
 use std::convert::TryInto;
+use serde_json::Value as JsonValue;
 
 use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, room::{self, Membership}, room_version::VersionedPdu}, state::StateResolver, storage::Storage, util::{MatrixId, MxidError}};
 
+// TODO: builder pattern
 pub struct NewEvent {
     pub event_content: EventContent,
     pub sender: MatrixId,
     pub state_key: Option<String>,
     pub redacts: Option<String>,
+    pub unsigned: Option<JsonValue>,
 }
 
 #[derive(Debug, Display)]

@@ -84,12 +84,12 @@ impl PduV4 {
             state_key: self.state_key,
             unsigned: self.unsigned,
             redacts: self.redacts,
-            event_id: Some(event_id),
             origin_server_ts: Some(self.origin_server_ts),
         }
     }
 
     pub fn event_id(&self) -> String {
+        // TODO: badly wrong
         format!("${}", self.hashes.sha256)
     }
 }

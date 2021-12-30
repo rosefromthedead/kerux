@@ -4,6 +4,7 @@ extern crate tokio_postgres as pg;
 use actix_web::{App, web::{self, JsonConfig}};
 use error::Error;
 use serde::Deserialize;
+use state::StateResolver;
 use tracing_subscriber::EnvFilter;
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ pub struct Config {
 pub struct ServerState {
     pub config: Config,
     pub db_pool: Box<dyn StorageManager>,
+    pub state_resolver: StateResolver,
 }
 
 #[actix_web::main]
@@ -54,7 +56,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "sled" => Box::new(storage::sled::SledStorage::new("sled")?) as _,
         _ => panic!("invalid storage type"),
     };
-    let server_state = Arc::new(ServerState { config, db_pool });
+    let state_resolver = StateResolver::new(db_pool.get_handle().await?);
+    let server_state = Arc::new(ServerState { config, db_pool, state_resolver });
 
     let server_state2 = Arc::clone(&server_state);
     actix_web::HttpServer::new(move || {

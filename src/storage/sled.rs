@@ -17,7 +17,7 @@ use sled::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, UnhashedPdu, ephemeral::Typing, pdu::StoredPdu, room_version::VersionedPdu}, storage::{Storage, StorageManager}, util::MatrixId};
+use crate::{error::{Error, ErrorKind}, events::{Event, ephemeral::Typing, pdu::StoredPdu, room_version::VersionedPdu}, storage::{Storage, StorageManager}, util::MatrixId};
 
 use super::{Batch, EventQuery, QueryType, UserProfile};
 
@@ -436,48 +436,6 @@ impl Storage for SledStorageHandle {
             self.rooms.insert(pdu.room_id().clone(), &[])?;
         }
         Ok(())
-    }
-
-    async fn add_event_unchecked(
-        &self,
-        event: Event,
-        auth_events: Vec<String>,
-    ) -> Result<String, Error> {
-        let Event {
-            event_content,
-            room_id,
-            sender,
-            state_key,
-            unsigned,
-            redacts,
-            event_id: _,
-            origin_server_ts: _,
-        } = event;
-        let room_id = room_id.unwrap();
-        let depth_data: Depth = self
-            .get_room_ordering_tree(&room_id)
-            .await?
-            .get_value(&room_id)?
-            .ok_or(ErrorKind::RoomNotFound)?;
-        let origin = String::from(sender.domain());
-        let origin_server_ts = chrono::Utc::now().timestamp_millis();
-        let pdu = UnhashedPdu {
-            event_content,
-            room_id,
-            sender,
-            state_key,
-            unsigned,
-            redacts,
-            origin: origin.clone(),
-            origin_server_ts,
-            prev_events: depth_data.event_ids.into_iter().collect(),
-            depth: depth_data.depth + 1,
-            auth_events,
-        }
-        .finalize();
-        let event_id = pdu.event_id();
-        self.add_pdus(&[pdu]).await?;
-        Ok(event_id)
     }
 
     async fn query_pdus<'a>(

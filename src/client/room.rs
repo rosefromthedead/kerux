@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{ServerState, client::auth::AccessToken, error::{Error, ErrorKind}, events::{
-        room, Event, EventContent, UnhashedPdu,
+        room, Event, EventContent,
     }, storage::{Storage, StorageManager, UserProfile}, util::{MatrixId, StorageExt, storage::NewEvent}};
 
 #[derive(Deserialize)]
@@ -78,7 +78,6 @@ pub async fn create_room(
     }
 
     let room_id = format!("!{:016X}:{}", rand::random::<i64>(), state.config.domain);
-    let mut events = Vec::new();
     let now = chrono::Utc::now().timestamp_millis();
 
     db.add_event(&room_id, NewEvent {
@@ -94,7 +93,8 @@ pub async fn create_room(
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
 
     let creator_join = {
         let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
@@ -110,7 +110,8 @@ pub async fn create_room(
         sender: user_id.clone(),
         state_key: Some(user_id.clone_inner()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
 
     // TODO: default power levels a bit of a mess
     db.add_event(&room_id, NewEvent {
@@ -119,7 +120,8 @@ pub async fn create_room(
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
 
     let (join_rule, history_visibility, guest_access) = {
         use room::{JoinRule::*, HistoryVisibilityType::*, GuestAccessType::*};
@@ -137,7 +139,8 @@ pub async fn create_room(
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
     db.add_event(&room_id, NewEvent {
         event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
             history_visibility
@@ -145,13 +148,15 @@ pub async fn create_room(
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
     db.add_event(&room_id, NewEvent {
         event_content: EventContent::GuestAccess(room::GuestAccess { guest_access }),
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
-    });
+        unsigned: None,
+    }, &state.state_resolver);
 
     for event in req.initial_state.into_iter().flatten() {
         db.add_event(&room_id, NewEvent {
@@ -159,7 +164,8 @@ pub async fn create_room(
             sender: user_id.clone(),
             state_key: Some(event.state_key),
             redacts: None,
-        });
+            unsigned: None,
+        }, &state.state_resolver);
     }
 
     if let Some(name) = req.name {
@@ -168,7 +174,8 @@ pub async fn create_room(
             sender: user_id.clone(),
             state_key: Some(String::new()),
             redacts: None,
-        });
+            unsigned: None,
+        }, &state.state_resolver);
     }
 
     if let Some(topic) = req.topic {
@@ -177,7 +184,8 @@ pub async fn create_room(
             sender: user_id.clone(),
             state_key: Some(String::new()),
             redacts: None,
-        });
+            unsigned: None,
+        }, &state.state_resolver);
     }
 
     for invitee in req.invite.into_iter().flatten() {
@@ -191,7 +199,8 @@ pub async fn create_room(
             sender: user_id.clone(),
             state_key: Some(invitee),
             redacts: None,
-        });
+            unsigned: None,
+        }, &state.state_resolver);
     }
 
     tracing::info!(room_id = room_id.as_str(), "Created room");
@@ -221,7 +230,7 @@ pub async fn invite(
     let invitee = req.into_inner().user_id;
     let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
 
-    let invite_event = Event {
+    let invite_event = NewEvent {
         event_content: EventContent::Member(room::Member {
             avatar_url: invitee_profile.avatar_url,
             displayname: invitee_profile.displayname,
@@ -229,15 +238,12 @@ pub async fn invite(
             is_direct: false,
         }),
         sender: user_id.clone(),
-        room_id: Some(room_id),
         state_key: Some(invitee.clone_inner()),
-        unsigned: None,
         redacts: None,
-        event_id: None,
-        origin_server_ts: None,
+        unsigned: None,
     };
 
-    db.add_event(invite_event).await?;
+    db.add_event(&room_id, invite_event, &state.state_resolver).await?;
 
     Ok(Json(json!({})))
 }
@@ -256,23 +262,20 @@ pub async fn join_by_id_or_alias(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let profile = db.get_profile(&username).await?.unwrap_or_default();
 
-    let event = Event {
+    let event = NewEvent {
         event_content: EventContent::Member(room::Member {
             avatar_url: profile.avatar_url,
             displayname: profile.displayname,
             membership: room::Membership::Join,
             is_direct: false,
         }),
-        room_id: Some(room_id_or_alias.clone()),   //TODO: what even is an alias
         sender: user_id.clone(),
         state_key: Some(user_id.to_string()),
-        unsigned: None,
         redacts: None,
-        event_id: None,
-        origin_server_ts: None,
+        unsigned: None,
     };
 
-    db.add_event(event).await?;
+    db.add_event(&room_id_or_alias, event, &state.state_resolver).await?;
 
     Ok(Json(serde_json::json!({
         "room_id": room_id_or_alias
