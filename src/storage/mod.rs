@@ -143,7 +143,7 @@ pub trait Storage: Send + Sync {
     async fn create_user(
         &self,
         username: &str,
-        password_hash: &str, //TODO: accept "password" and do the hashing here
+        password: &str,
     ) -> Result<(), Error>;
 
     async fn verify_password(

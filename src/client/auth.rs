@@ -192,11 +192,8 @@ pub async fn register(
     let user_id = MatrixId::new(&req.username, &state.config.domain)
         .map_err(|e| ErrorKind::BadJson(format!("{}", e)))?;
 
-    let salt: [u8; 16] = rand::random();
-    let password_hash = argon2::hash_encoded(req.password.as_bytes(), &salt, &Default::default())?;
-
     let db = state.db_pool.get_handle().await?;
-    db.create_user(&user_id.localpart(), &password_hash).await?;
+    db.create_user(&user_id.localpart(), &req.password).await?;
     if req.inhibit_login {
         return Ok(Json(json!({
             "user_id": req.username
