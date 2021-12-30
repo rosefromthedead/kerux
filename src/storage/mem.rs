@@ -85,6 +85,9 @@ impl Storage for MemStorageHandle {
         let salt: [u8; 16] = rand::random();
         let password_hash = argon2::hash_encoded(password.as_bytes(), &salt, &Default::default())?;
         let mut db = self.inner.write().await;
+        if db.users.iter().find(|u| u.username == username).is_some() {
+            return Err(ErrorKind::UsernameTaken.into());
+        }
         db.users.push(User {
             username: username.to_string(),
             password_hash: password_hash.to_string(),
@@ -118,6 +121,9 @@ impl Storage for MemStorageHandle {
     ) -> Result<Uuid, Error> {
         let mut db = self.inner.write().await;
         let token = Uuid::new_v4();
+        if db.users.iter().find(|u| u.username == username).is_none() {
+            return Err(ErrorKind::UserNotFound.into());
+        }
         db.access_tokens.insert(token, username.to_string());
         Ok(token)
     }
@@ -262,11 +268,11 @@ impl Storage for MemStorageHandle {
 
         if query.query_type.is_state() {
             ret.reverse();
-            let mut seen = HashSet::new();
+/*            let mut seen = HashSet::new();
             // remove pdus that are older than another pdu with the same state key
             ret.retain(|pdu| {
                 seen.insert(pdu.state_key().to_string().unwrap())
-            });
+            });*/
             ret.reverse();
         }
 

@@ -53,7 +53,8 @@ impl<'a> StorageExt for dyn Storage + 'a {
         event: NewEvent,
         state_resolver: &StateResolver,
     ) -> Result<String, Error> {
-        let prev_events = self.get_prev_events(room_id)?;
+        // TODO: aaaaaaaaaaaaa
+        let prev_events = &[];
         if let EventContent::Create(_) = event.event_content {
             panic!("wrong function");
         }
@@ -79,6 +80,8 @@ impl<'a> StorageExt for dyn Storage + 'a {
             }
             // TODO: third party invites
         }
+        // TODO: aaaaaaaaaaaaa
+        Ok(String::new())
     }
 
     //TODO: check return type
@@ -93,7 +96,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
                     return Ok(levels.get_user_level(event.sender()));
                 },
                 EventContent::Create(create) => {
-                    create_event_content = Some(create);
+                    create_event_content = Some(create.clone());
                 },
                 _ => {},
             }

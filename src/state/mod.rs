@@ -21,7 +21,7 @@ impl State {
         if let Some(event_id) = self.get((T::EVENT_TYPE, state_key)) {
             let event = db.get_pdu(&self.room_id, &event_id).await?
                 .expect("event in state doesn't exist");
-            return Ok(Some(event.event_content().try_into().map_err(|_| ()).unwrap()))
+            return Ok(Some(event.event_content().clone().try_into().map_err(|_| ()).unwrap()))
         }
         Ok(None)
     }
@@ -155,15 +155,17 @@ impl StateResolver {
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
                 crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
-                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key.clone())), event_id.clone());
+                let state_key = String::from(*state_key);
+                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key)), event_id.clone());
             }
         }
 
         // STEP 3
         // mainline ordering D:
 
-        let get_power_levels = |event: &VersionedPdu| async move {
-            for auth_event_id in event.auth_events().iter() {
+        let get_power_levels = |event: VersionedPdu| async move {
+            let auth_events = event.auth_events().clone();
+            for auth_event_id in auth_events.iter() {
                 let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
                 match auth_event.event_content() {
                     EventContent::PowerLevels(_) =>
@@ -180,7 +182,7 @@ impl StateResolver {
             .get(&(Cow::from("m.room.power_levels"), Cow::from(""))).expect("oh no");
         let mut mainline = vec![mainline_starting_point.clone()];
         let mut current = mainline_starting_point.clone();
-        while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap().inner()).await? {
+        while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap().inner().clone()).await? {
             mainline.push(parent.clone());
             current = parent;
         }
@@ -195,7 +197,7 @@ impl StateResolver {
                 }
 
                 let current_event = self.db.get_pdu(room_id, &current).await?.unwrap();
-                match get_power_levels(current_event.inner()).await? {
+                match get_power_levels(current_event.inner().clone()).await? {
                     Some(id) => current = id.clone(),
                     None => break 'inner std::usize::MAX,
                 }
@@ -225,7 +227,8 @@ impl StateResolver {
                 }
                 frankenstate.map.extend(partially_resolved_state.clone().into_iter());
                 crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
-                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key.clone())), event.event_id().to_string());
+                let state_key = String::from(*state_key);
+                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key)), event.event_id().to_string());
             }
         }
 
@@ -406,7 +409,7 @@ mod tests {
         }), sender: alice, state_key: Some(String::new()), redacts: None, unsigned: None }, resolver).await?;
         Ok(())
     }
-
+/*
     #[test]
     fn simple() {
         let rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
@@ -419,5 +422,5 @@ mod tests {
         let state_resolver = StateResolver::new(storage_manager.get_handle().await?);
         db.add_pdus();
         Ok(())
-    }
+    }*/
 }
