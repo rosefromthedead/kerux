@@ -7,7 +7,7 @@ use std::{
 use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, UnhashedPdu, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
+use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
 
 struct MemStorage {
     rooms: HashMap<String, Room>,
@@ -197,49 +197,6 @@ impl Storage for MemStorageHandle {
                 .push(pdu.clone());
         }
         Ok(())
-    }
-
-    async fn add_event_unchecked(&self, event: Event, auth_events: Vec<String>) -> Result<String, Error> {
-        let mut db = self.inner.write().await;
-        let room_id = event.room_id.as_ref().unwrap();
-        let room = db.rooms.get_mut(room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
-        let depth = room.events.iter().map(|pdu| pdu.depth).max().unwrap();
-        let prev_events = room.events.iter()
-            .filter(|pdu| pdu.depth == depth)
-            .map(|pdu| pdu.event_id())
-            .collect::<Vec<_>>();
-        let Event {
-            event_content,
-            room_id,
-            sender,
-            state_key,
-            unsigned,
-            redacts,
-            event_id: _,
-            origin_server_ts: _,
-        } = event;
-        let origin = String::from(sender.domain());
-        let origin_server_ts = chrono::Utc::now().timestamp_millis();
-        let pdu = UnhashedPdu {
-            event_content,
-            room_id: room_id.unwrap(),
-            sender,
-            state_key,
-            unsigned,
-            redacts,
-            origin: origin.clone(),
-            origin_server_ts,
-            prev_events,
-            depth: depth + 1,
-            auth_events,
-        }.finalize();
-        let hash = pdu.hashes.sha256.clone();
-        let event_id = pdu.event_id();
-        tracing::trace!(?pdu, "Adding event to storage");
-        room.events.push(pdu);
-        let _ = room.notify_send.send(());
-        Ok(event_id)
     }
 
     async fn query_pdus<'a>(

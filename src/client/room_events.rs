@@ -17,7 +17,7 @@ use crate::{
         room::Membership,
     },
     storage::{EventQuery, Storage, StorageManager, QueryType},
-    util::{MatrixId, StorageExt},
+    util::{MatrixId, StorageExt, storage::NewEvent},
     ServerState,
 };
 
@@ -482,18 +482,15 @@ pub async fn send_state_event(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    let event = Event {
+    let event = NewEvent {
         event_content: EventContent::new(&event_type, event_content.into_inner())?,
-        room_id: Some(room_id),
         sender: user_id,
         state_key: Some(state_key),
         redacts: None,
         unsigned: None,
-        event_id: None,
-        origin_server_ts: None,
     };
 
-    let event_id = db.add_event(event).await?;
+    let event_id = db.add_event(&room_id, event, &state.state_resolver).await?;
 
     tracing::trace!(event_id = &event_id.as_str(), "Added event");
 
@@ -518,20 +515,17 @@ pub async fn send_event(
     }
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    let event = Event {
+    let event = NewEvent {
         event_content: EventContent::new(&event_type, event_content.into_inner())?,
-        room_id: Some(room_id.clone()),
         sender: user_id.clone(),
         state_key: None,
-        unsigned: Some(json!({"transaction_id": txn_id})),
         redacts: None,
-        event_id: None,
-        origin_server_ts: None,
+        unsigned: Some(json!({"transaction_id": txn_id})),
     };
 
     //TODO: is this right in the eyes of the spec? also does it matter?
     db.set_typing(&room_id, &user_id, false, 0).await?;
-    let event_id = db.add_event(event).await?;
+    let event_id = db.add_event(&room_id, event, &state.state_resolver).await?;
 
     tracing::trace!(event_id = &event_id.as_str(), "Added event");
 

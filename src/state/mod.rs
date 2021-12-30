@@ -387,6 +387,7 @@ fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
     panic!("oh come on now");
 }
 
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
@@ -396,13 +397,13 @@ mod tests {
 
     async fn construct_cursed_room(db: &dyn Storage, resolver: &StateResolver) -> Result<(), Error> {
         let room_id = "!cursed:example.org";
-        let alice = MatrixId::new("alice", "example.org")?;
+        let alice = MatrixId::new("alice", "example.org").unwrap();
         db.add_event(room_id, NewEvent { event_content: EventContent::Create(Create {
-            creator: alice,
+            creator: alice.clone(),
             room_version: Some(String::from("4")),
             predecessor: None,
             extra: HashMap::new(),
-        }), sender: alice, state_key: Some(String::new()), redacts: None }, resolver).await?;
+        }), sender: alice, state_key: Some(String::new()), redacts: None, unsigned: None }, resolver).await?;
         Ok(())
     }
 
