@@ -364,14 +364,15 @@ mod tests {
     #[cfg(feature = "storage-sled")]
     #[test]
     fn sled_backend_user_accounts() {
-        let _ = std::fs::remove_dir_all("sled-test-storage");
+        let path = "sled-test-user-accounts";
+        let _ = std::fs::remove_dir_all(path);
         let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
-        let db_pool = super::sled::SledStorage::new("sled-test-storage").unwrap();
+        let db_pool = super::sled::SledStorage::new(path).unwrap();
         rt.block_on(async {
             let db = db_pool.get_handle().await.unwrap();
             user_accounts(&*db).await;
         });
-        let _ = std::fs::remove_dir_all("sled-test-storage");
+        let _ = std::fs::remove_dir_all(path);
     }
 
     async fn user_accounts(db: &dyn Storage) {
@@ -402,5 +403,38 @@ mod tests {
         db.delete_all_access_tokens(alice_token_1).await.expect("failed to delete all tokens");
         assert_eq!(db.try_auth(alice_token_1).await.expect("failed during auth").as_deref(), None);
         assert_eq!(db.try_auth(bob_token_1).await.expect("failed during auth").as_deref(), Some("bob"));
+    }
+
+    #[cfg(feature = "storage-mem")]
+    #[test]
+    fn mem_backend_transactions() {
+        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        let db_pool = super::mem::MemStorageManager::new();
+        rt.block_on(async {
+            let db = db_pool.get_handle().await.unwrap();
+            transactions(&*db).await;
+        });
+    }
+
+    #[cfg(feature = "storage-sled")]
+    #[test]
+    fn sled_backend_transactions() {
+        let path = "sled-test-transactions";
+        let _ = std::fs::remove_dir_all(path);
+        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        let db_pool = super::sled::SledStorage::new(path).unwrap();
+        rt.block_on(async {
+            let db = db_pool.get_handle().await.unwrap();
+            transactions(&*db).await;
+        });
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    async fn transactions(db: &dyn Storage) {
+        db.create_user("alice", "password").await.unwrap();
+        let token = db.create_access_token("alice", "phone").await.unwrap();
+        assert_eq!(db.record_txn(token, String::from("txn1")).await.expect("failed to record transaction"), true);
+        assert_eq!(db.record_txn(token, String::from("txn1")).await.expect("failed to record transaction"), false);
+        assert_eq!(db.record_txn(token, String::from("txn2")).await.expect("failed to record transaction"), true);
     }
 }
