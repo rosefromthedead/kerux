@@ -1,11 +1,8 @@
 use async_trait::async_trait;
 use displaydoc::Display;
-use enum_extract::extract;
-use tracing::{instrument, Level, trace};
-use std::convert::TryInto;
 use serde_json::Value as JsonValue;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, room::{self, Membership}, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::StateResolver, storage::Storage, util::{MatrixId, MxidError}};
+use crate::{error::Error, events::{EventContent, room::Membership, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::StateResolver, storage::Storage, util::MatrixId};
 
 // TODO: builder pattern
 #[derive(Debug)]
@@ -151,88 +148,4 @@ impl<'a> StorageExt for dyn Storage + 'a {
         ).await?;
         Ok(())
     }
-}
-
-async fn validate_member_event(
-    db: &dyn Storage,
-    event: &Event,
-    room_id: &str,
-    power_levels: &room::PowerLevels,
-) -> Result<(), Error> {
-    let sender_membership = db.get_membership(&event.sender, room_id).await?;
-    let affected_user = event.state_key.clone().ok_or_else(
-        || AddEventError::InvalidEvent("no state key in m.room.member event".to_string())
-    )?.try_into().map_err(|e: MxidError| AddEventError::InvalidEvent(e.to_string()))?;
-    let prev_membership = db.get_membership(&affected_user, room_id).await?;
-
-    // can't use extract because it's behind a reference how sad is that
-    let new_member_content = match event.event_content {
-        EventContent::Member(ref v) => v,
-        _ => panic!("m.room.member not a member event"),
-    };
-    let new_membership = &new_member_content.membership;
-    use room::Membership::*;
-    match new_membership {
-        Join => {
-            if affected_user != event.sender {
-                return Err(AddEventError::InvalidEvent(
-                    "user tried to set someone else's membership to join".to_string()
-                ).into());
-            }
-            match prev_membership {
-                Some(Join) | Some(Invite) => {},
-                Some(Ban) => return Err(AddEventError::UserBanned.into()),
-                _ => {
-                    let join_rules_event = db.get_state_event(room_id, "m.room.join_rules", "").await?;
-                    let is_public = match join_rules_event {
-                        Some(e) => {
-                            let join_rules =
-                                extract!(EventContent::JoinRules(_), e.event_content).unwrap();
-                            join_rules.join_rule == room::JoinRule::Public
-                        },
-                        None => false,
-                    };
-                    if !is_public {
-                        return Err(AddEventError::UserNotInvited.into());
-                    }
-                },
-            }
-        },
-        Leave => {
-            if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom.into());
-            }
-            if event.state_key.as_deref() != Some(event.sender.as_str()) {
-                // users can set own membership to leave, but setting others'
-                // to leave is kicking and you need permission for that
-                let user_level = power_levels.get_user_level(&event.sender);
-                let kick_level = power_levels.kick();
-                if user_level < kick_level {
-                    return Err(AddEventError::InsufficientPowerLevel.into());
-                }
-            }
-        },
-        Ban => {
-            if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom.into());
-            }
-            let user_level = power_levels.get_user_level(&event.sender);
-            let ban_level = power_levels.ban();
-            if user_level < ban_level {
-                return Err(AddEventError::InsufficientPowerLevel.into());
-            }
-        },
-        Invite => {
-            if sender_membership != Some(room::Membership::Join) {
-                return Err(AddEventError::UserNotInRoom.into());
-            }
-            let user_level = power_levels.get_user_level(&event.sender);
-            let invite_level = power_levels.invite();
-            if user_level < invite_level {
-                return Err(AddEventError::InsufficientPowerLevel.into());
-            }
-        },
-        Knock => unimplemented!(),
-    }
-    Ok(())
 }

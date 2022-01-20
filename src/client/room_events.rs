@@ -16,7 +16,7 @@ use crate::{
         Event, EventContent,
         room::Membership,
     },
-    storage::{EventQuery, Storage, StorageManager, QueryType},
+    storage::{EventQuery, QueryType},
     util::{MatrixId, StorageExt, storage::NewEvent},
     ServerState,
 };
@@ -477,7 +477,7 @@ pub async fn send_state_event(
     Path((room_id, event_type, state_key)): Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
@@ -507,7 +507,7 @@ pub async fn send_event(
     Path((room_id, event_type, txn_id)): Path<(String, String, String)>,
     event_content: Json<JsonValue>,
 ) -> Result<Json<SendEventResponse>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     if !db.record_txn(token.0, txn_id.clone()).await? {

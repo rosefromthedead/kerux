@@ -10,7 +10,7 @@ use std::{convert::TryFrom, sync::Arc};
 use uuid::Uuid;
 
 use crate::{
-    error::{Error, ErrorKind}, storage::{Storage, StorageManager}, util::MatrixId, ServerState
+    error::{Error, ErrorKind}, util::MatrixId, ServerState
 };
 
 #[derive(Debug, Deserialize)]

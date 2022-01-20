@@ -1,6 +1,6 @@
 use std::{borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, convert::TryInto, iter::FromIterator, sync::{Arc, Mutex}};
 
-use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
+use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage};
 
 use super::StorageExt;
 
@@ -408,7 +408,7 @@ fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::{Create, Name, Member, Membership}, EventContent, room_version::{v4::{PduV4, UnhashedPdu}, VersionedPdu}, pdu::StoredPdu}};
+    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::{Create, Name, Member, Membership}, EventContent, room_version::{v4::UnhashedPdu, VersionedPdu}, pdu::StoredPdu}};
 
     use super::StateResolver;
 

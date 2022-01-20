@@ -1,7 +1,7 @@
 use actix_web::{post, web::Data};
 use std::sync::Arc;
 
-use crate::{storage::{Storage, StorageManager}, ServerState};
+use crate::ServerState;
 
 pub mod mxid;
 pub mod storage;

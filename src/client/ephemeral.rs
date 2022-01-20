@@ -10,7 +10,6 @@ use tracing::{Level, Span, instrument, field::Empty};
 use crate::{
     client::auth::AccessToken,
     error::{Error, ErrorKind},
-    storage::{Storage, StorageManager},
     util::MatrixId,
     ServerState,
 };

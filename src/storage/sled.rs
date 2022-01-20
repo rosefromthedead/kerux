@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::TryInto,
     sync::Arc,
     time::{Duration, Instant},
@@ -17,7 +17,7 @@ use sled::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, ephemeral::Typing, pdu::StoredPdu, room_version::VersionedPdu}, storage::{Storage, StorageManager}, util::MatrixId};
+use crate::{error::{Error, ErrorKind}, events::{ephemeral::Typing, pdu::StoredPdu}, storage::{Storage, StorageManager}, util::MatrixId};
 
 use super::{Batch, EventQuery, QueryType, UserProfile};
 

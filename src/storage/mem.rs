@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
-use tracing::trace;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc, time::{Duration, Instant},
@@ -8,7 +7,7 @@ use std::{
 use tokio::sync::{RwLock, broadcast::{channel, Sender}};
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
+use crate::{error::{Error, ErrorKind}, events::{EventContent, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
 
 struct MemStorage {
     rooms: HashMap<String, Room>,
@@ -107,7 +106,7 @@ impl Storage for MemStorageHandle {
             match argon2::verify_encoded(&user.password_hash, password.as_bytes()) {
                 Ok(true) => Ok(true),
                 Ok(false) => Ok(false),
-                Err(e) => Ok(false),
+                Err(_) => Ok(false),
             }
         } else {
             Ok(false)
