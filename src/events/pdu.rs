@@ -7,8 +7,8 @@ use super::{Event, room_version::VersionedPdu};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StoredPdu {
-    inner: VersionedPdu,
-    auth_status: AuthStatus,
+    pub inner: VersionedPdu,
+    pub auth_status: AuthStatus,
 }
 
 impl StoredPdu {
@@ -70,7 +70,7 @@ impl StoredPdu {
 
     // TODO: actually completely wrong
     // event_id should probably be stored in StoredPdu because it is not part of a pdu
-    pub fn event_id(&self) -> &str {
+    pub fn event_id(&self) -> String {
         self.inner.event_id()
     }
 }

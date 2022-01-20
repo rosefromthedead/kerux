@@ -32,6 +32,13 @@ pub struct ServerState {
     pub state_resolver: StateResolver,
 }
 
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     run().await.map_err(|e| {
@@ -41,10 +48,7 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .pretty()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    init_tracing();
 
     let config: Config = toml::from_slice(&std::fs::read("config.toml")?)?;
     let db_pool = match &*config.storage {

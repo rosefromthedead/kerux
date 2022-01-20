@@ -158,12 +158,6 @@ struct AccessTokenData {
     device_id: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct Depth {
-    depth: i64,
-    event_ids: HashSet<String>,
-}
-
 #[derive(Default)]
 struct Ephemeral {
     ephemeral: HashMap<String, JsonValue>,
@@ -195,6 +189,7 @@ impl SledStorage {
             txn_ids: db.open_tree("txn_ids")?,
             batches: db.open_tree("batches")?,
             room_orderings: Arc::new(Mutex::new(HashMap::new())),
+            headless_events: db.open_tree("headless_events")?,
             ephemeral: Arc::new(Mutex::new(HashMap::new())),
         }))
     }
@@ -217,6 +212,7 @@ pub struct SledStorageHandle {
     txn_ids: Tree,
     batches: Tree,
     room_orderings: Arc<Mutex<HashMap<String, Tree>>>,
+    headless_events: Tree,
     ephemeral: Arc<Mutex<HashMap<String, Ephemeral>>>,
 }
 
@@ -389,9 +385,7 @@ impl Storage for SledStorageHandle {
     async fn add_pdus(&self, pdus: &[StoredPdu]) -> Result<(), Error> {
         for pdu in pdus {
             let name = format!("{}_{}", pdu.room_id(), pdu.event_id());
-            dbg!();
             self.events.try_insert_value(name, pdu)?;
-            dbg!();
             let ordering_tree = self.get_room_ordering_tree(&pdu.room_id()).await?;
             'cas: loop {
                 if let Some((key, _value)) = ordering_tree.last()? {
@@ -410,37 +404,26 @@ impl Storage for SledStorageHandle {
                     }
                 }
             }
-            ordering_tree.transaction(|txn| {
-                dbg!();
-                use ConflictableTransactionError::Abort;
-                if let Some(mut old_depth) = txn.get_value::<_, Depth>("depth").map_err(Abort)? {
-                    if old_depth.depth > pdu.depth() {
-                        // we are keeping track of the highest depth events. this event is lower
-                        // than one that's already in there - so we don't do anything
-                        return Ok(());
-                    } else if old_depth.depth == pdu.depth() {
-                        old_depth.event_ids.insert(pdu.event_id().to_string());
-                        txn.overwrite_value("depth", old_depth).map_err(Abort)?;
-                        return Ok(());
-                    }
-                }
-                // at this point, either there was no depth info, or the new pdu has greater depth,
-                // so we create a new entry
-                let new_depth = Depth {
-                    depth: pdu.depth(),
-                    event_ids: {
-                        let mut set = HashSet::new();
-                        set.insert(pdu.event_id().to_string());
-                        set
-                    },
-                };
-                txn.overwrite_value("depth", new_depth).map_err(Abort)?;
-                dbg!();
-                Ok(())
-            });
+            for prev_event in pdu.prev_events() {
+                self.headless_events.remove(&format!("{}~{}", pdu.room_id(), prev_event))?;
+            }
+            self.headless_events.insert(&format!("{}~{}", pdu.room_id(), pdu.event_id()), &[])?;
             self.rooms.insert(pdu.room_id().clone(), &[])?;
         }
         Ok(())
+    }
+
+    async fn get_prev_events(&self, room_id: &str) -> Result<Vec<String>, Error> {
+        let mut prefix = String::from(room_id).into_bytes();
+        prefix.push(0);
+        self.headless_events.scan_prefix(&prefix)
+            .keys()
+            .map_ok(|k| k.split(|&b| b == b'~').nth(1).unwrap().to_owned())
+            .map_ok(String::from_utf8)
+            .map_ok(Result::unwrap)
+            .collect::<Result<Vec<String>, sled::Error>>()
+            .map_err(ErrorKind::SledError)
+            .map_err(ErrorKind::into)
     }
 
     async fn query_pdus<'a>(

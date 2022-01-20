@@ -1,12 +1,14 @@
 use async_trait::async_trait;
 use displaydoc::Display;
 use enum_extract::extract;
+use tracing::{instrument, Level, trace};
 use std::convert::TryInto;
 use serde_json::Value as JsonValue;
 
-use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, room::{self, Membership}, room_version::VersionedPdu}, state::StateResolver, storage::Storage, util::{MatrixId, MxidError}};
+use crate::{error::{Error, ErrorKind}, events::{Event, EventContent, room::{self, Membership}, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::StateResolver, storage::Storage, util::{MatrixId, MxidError}};
 
 // TODO: builder pattern
+#[derive(Debug)]
 pub struct NewEvent {
     pub event_content: EventContent,
     pub sender: MatrixId,
@@ -53,12 +55,11 @@ impl<'a> StorageExt for dyn Storage + 'a {
         event: NewEvent,
         state_resolver: &StateResolver,
     ) -> Result<String, Error> {
-        // TODO: aaaaaaaaaaaaa
-        let prev_events = &[];
         if let EventContent::Create(_) = event.event_content {
             panic!("wrong function");
         }
-        let state = state_resolver.resolve(room_id, prev_events).await?;
+        let prev_events = self.get_prev_events(room_id).await?;
+        let state = state_resolver.resolve(room_id, &prev_events).await?;
 
         let mut auth_events = Vec::new();
         auth_events.push(state.get(("m.room.create", "")).unwrap().to_string());
@@ -69,7 +70,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
             auth_events.push(member_event.to_string());
         }
         if let EventContent::Member(content) = &event.event_content {
-            if let Some(target_member_event) = state.get(("m.room.member", &event.state_key.unwrap())) {
+            if let Some(target_member_event) = state.get(("m.room.member", event.state_key.as_ref().unwrap())) {
                 auth_events.push(target_member_event.to_string());
             }
             if content.membership == Membership::Join
@@ -80,8 +81,33 @@ impl<'a> StorageExt for dyn Storage + 'a {
             }
             // TODO: third party invites
         }
-        // TODO: aaaaaaaaaaaaa
-        Ok(String::new())
+
+        let origin = event.sender.domain().to_owned();
+        let unhashed = UnhashedPdu {
+            event_content: event.event_content,
+            room_id: String::from(room_id),
+            sender: event.sender,
+            state_key: event.state_key,
+            unsigned: event.unsigned,
+            redacts: event.redacts,
+            origin,
+            origin_server_ts: chrono::Utc::now().timestamp_millis(),
+            prev_events,
+            // TODO
+            depth: i64::MAX,
+            auth_events,
+        };
+        let pdu = VersionedPdu::V4(unhashed.finalize());
+
+        let auth_status = crate::validate::auth::auth_check_v1(self, &pdu, &state).await?;
+        let stored_pdu = StoredPdu {
+            inner: pdu,
+            auth_status,
+        };
+        let event_id = stored_pdu.event_id().to_owned();
+        self.add_pdus(&[stored_pdu]).await?;
+
+        Ok(event_id)
     }
 
     //TODO: check return type

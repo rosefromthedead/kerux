@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
+use tracing::trace;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc, time::{Duration, Instant},
@@ -89,8 +90,7 @@ impl Storage for MemStorageHandle {
             return Err(ErrorKind::UsernameTaken.into());
         }
         db.users.push(User {
-            username: username.to_string(),
-            password_hash: password_hash.to_string(),
+            username: username.to_string(), password_hash: password_hash.to_string(),
             profile: UserProfile {
                 avatar_url: None,
                 displayname: None,
@@ -205,6 +205,20 @@ impl Storage for MemStorageHandle {
                 .push(pdu.clone());
         }
         Ok(())
+    }
+
+    async fn get_prev_events(&self, room_id: &str) -> Result<Vec<String>, Error> {
+        let db = self.inner.read().await;
+        let room = db.rooms.get(room_id).ok_or(ErrorKind::RoomNotFound)?;
+        let mut prev_events = room.events.iter()
+            .map(|pdu| pdu.event_id())
+            .collect::<HashSet<_>>();
+        for event in room.events.iter() {
+            for prev in event.prev_events() {
+                prev_events.remove(&**prev);
+            }
+        }
+        Ok(prev_events.into_iter().map(String::from).collect::<Vec<_>>())
     }
 
     async fn query_pdus<'a>(
