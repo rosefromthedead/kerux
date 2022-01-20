@@ -1,4 +1,4 @@
-use std::{fmt::Display, io::Error as IoError, str::Utf8Error, string::FromUtf8Error};
+use std::{fmt::Display, str::Utf8Error, string::FromUtf8Error};
 
 use actix_web::{HttpResponse, ResponseError, dev::HttpResponseBuilder, error::JsonPayloadError, http::StatusCode};
 use displaydoc::Display;

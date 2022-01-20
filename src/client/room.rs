@@ -7,9 +7,14 @@ use std::{
     sync::Arc,
 };
 
-use crate::{ServerState, client::auth::AccessToken, error::{Error, ErrorKind}, events::{
-        room, Event, EventContent,
-    }, storage::{Storage, StorageManager, UserProfile}, util::{MatrixId, StorageExt, storage::NewEvent}};
+use crate::{
+    client::auth::AccessToken,
+    error::{Error, ErrorKind},
+    events::{room, EventContent},
+    storage::UserProfile,
+    util::{MatrixId, StorageExt, storage::NewEvent},
+    ServerState
+};
 
 #[derive(Deserialize)]
 pub struct CreateRoomRequest {
@@ -78,7 +83,6 @@ pub async fn create_room(
     }
 
     let room_id = format!("!{:016X}:{}", rand::random::<i64>(), state.config.domain);
-    let now = chrono::Utc::now().timestamp_millis();
 
     db.add_event(&room_id, NewEvent {
         event_content: EventContent::Create(room::Create {
@@ -94,7 +98,7 @@ pub async fn create_room(
         state_key: Some(String::new()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
 
     let creator_join = {
         let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
@@ -111,7 +115,7 @@ pub async fn create_room(
         state_key: Some(user_id.clone_inner()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
 
     // TODO: default power levels a bit of a mess
     db.add_event(&room_id, NewEvent {
@@ -121,7 +125,7 @@ pub async fn create_room(
         state_key: Some(String::new()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
 
     let (join_rule, history_visibility, guest_access) = {
         use room::{JoinRule::*, HistoryVisibilityType::*, GuestAccessType::*};
@@ -140,7 +144,7 @@ pub async fn create_room(
         state_key: Some(String::new()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
     db.add_event(&room_id, NewEvent {
         event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
             history_visibility
@@ -149,14 +153,14 @@ pub async fn create_room(
         state_key: Some(String::new()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
     db.add_event(&room_id, NewEvent {
         event_content: EventContent::GuestAccess(room::GuestAccess { guest_access }),
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
         unsigned: None,
-    }, &state.state_resolver);
+    }, &state.state_resolver).await?;
 
     for event in req.initial_state.into_iter().flatten() {
         db.add_event(&room_id, NewEvent {
@@ -165,7 +169,7 @@ pub async fn create_room(
             state_key: Some(event.state_key),
             redacts: None,
             unsigned: None,
-        }, &state.state_resolver);
+        }, &state.state_resolver).await?;
     }
 
     if let Some(name) = req.name {
@@ -175,7 +179,7 @@ pub async fn create_room(
             state_key: Some(String::new()),
             redacts: None,
             unsigned: None,
-        }, &state.state_resolver);
+        }, &state.state_resolver).await?;
     }
 
     if let Some(topic) = req.topic {
@@ -185,7 +189,7 @@ pub async fn create_room(
             state_key: Some(String::new()),
             redacts: None,
             unsigned: None,
-        }, &state.state_resolver);
+        }, &state.state_resolver).await?;
     }
 
     for invitee in req.invite.into_iter().flatten() {
@@ -200,7 +204,7 @@ pub async fn create_room(
             state_key: Some(invitee),
             redacts: None,
             unsigned: None,
-        }, &state.state_resolver);
+        }, &state.state_resolver).await?;
     }
 
     tracing::info!(room_id = room_id.as_str(), "Created room");
@@ -223,7 +227,7 @@ pub async fn invite(
     Path(room_id): Path<String>,
     req: Json<InviteRequest>,
 ) -> Result<Json<JsonValue>, Error> {
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
@@ -256,7 +260,7 @@ pub async fn join_by_id_or_alias(
     Path(room_id_or_alias): Path<String>,
 ) -> Result<Json<JsonValue>, Error> {
     //TODO: implement server_name and third_party_signed args, and room aliases
-    let mut db = state.db_pool.get_handle().await?;
+    let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
