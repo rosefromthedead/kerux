@@ -228,20 +228,15 @@ impl SledStorageHandle {
         }
     }
 
-    async fn get_events(&self, ordering_tree: &Tree, query: &EventQuery<'_>, from: usize, mut to: Option<usize>) -> Result<(Vec<StoredPdu>, usize), Error> {
+    async fn get_events(&self, ordering_tree: &Tree, query: &EventQuery<'_>, from: usize, to: Option<usize>) -> Result<(Vec<StoredPdu>, usize), Error> {
         let mut ret = Vec::new();
-        if to.is_none() {
-            let bytes = ordering_tree.scan_prefix(&[0]).last().unwrap()?.0;
-            to = Some(u32::from_be_bytes(bytes[1..].try_into().unwrap()) as usize);
-        }
 
-        let mut from_key = [0; 5];
-        from_key[1..].copy_from_slice(&u32::to_be_bytes(from as u32));
-        let mut to_key = [0; 5];
-        to_key[1..].copy_from_slice(&u32::to_be_bytes(to.unwrap() as u32));
-
-        let pdu_iter = ordering_tree
-            .range(from_key..=to_key)
+        let from_bytes = from.to_be_bytes();
+        let to_bytes = to.clone().map(usize::to_be_bytes);
+        let pdu_iter = match to_bytes {
+                Some(to_bytes) => ordering_tree.range(from_bytes..=to_bytes),
+                None => ordering_tree.range(from_bytes..),
+            }
             .map_ok(|(_key, event_id)| {
                 self.events.get(&format!(
                         "{}_{}",
@@ -249,11 +244,11 @@ impl SledStorageHandle {
                         String::from_utf8(Vec::from(event_id.as_ref())).unwrap()
                         ))
             })
-        // flatten
-        .map(|res| match res {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) | Err(e) => Err(e),
-        });
+            // flatten
+            .map(|res| match res {
+                Ok(Ok(v)) => Ok(v),
+                Ok(Err(e)) | Err(e) => Err(e),
+            });
         for pdu in pdu_iter {
             // is Ok(None) if the event is not present, but it must be present if it's in the
             // ordering tree
@@ -389,13 +384,9 @@ impl Storage for SledStorageHandle {
             let ordering_tree = self.get_room_ordering_tree(&pdu.room_id()).await?;
             'cas: loop {
                 if let Some((key, _value)) = ordering_tree.last()? {
-                    let idx = u32::from_be_bytes(key[0..4].try_into().unwrap());
-                    let new_key_suffix = u32::to_be_bytes(idx + 1);
-                    // prepend null byte (arbitrary) to allow prefix scanning
-                    let mut new_key = [0u8; 5];
-                    new_key[1..].copy_from_slice(&new_key_suffix);
+                    let idx = u32::from_be_bytes(key[0..4].try_into().unwrap()) + 1;
                     let res = ordering_tree.compare_and_swap(
-                        &new_key,
+                        &u32::to_be_bytes(idx),
                         Option::<&[u8]>::None,
                         Some(&*pdu.event_id()),
                     )?;
