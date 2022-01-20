@@ -49,12 +49,26 @@ impl StateResolver {
         }
     }
 
+    #[tracing::instrument(level = tracing::Level::DEBUG, skip(self))]
     pub async fn resolve(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
         self.resolve_v2(room_id, events).await
     }
 
     #[async_recursion::async_recursion]
     pub async fn resolve_v2(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
+        tracing::trace!("resolving");
+        if events.len() == 0 {
+            return Ok(State {
+                room_id: room_id.to_owned(),
+                map: HashMap::new(),
+            });
+        }
+
+        let key = BTreeSet::from_iter(events.iter().map(ToOwned::to_owned));
+        if let Some(state) = self.cache.lock().unwrap().get(&key) {
+            return Ok(state.clone());
+        }
+
         if events.len() == 1 {
             let event = self.db.get_pdu(room_id, &events[0]).await?.unwrap();
             let mut state = self.resolve_v2(room_id, event.prev_events()).await?;
@@ -394,33 +408,73 @@ fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::Create, EventContent}};
+    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::{Create, Name, Member, Membership}, EventContent, room_version::{v4::{PduV4, UnhashedPdu}, VersionedPdu}, pdu::StoredPdu}};
 
     use super::StateResolver;
 
     async fn construct_cursed_room(db: &dyn Storage, resolver: &StateResolver) -> Result<(), Error> {
         let room_id = "!cursed:example.org";
         let alice = MatrixId::new("alice", "example.org").unwrap();
-        db.add_event(room_id, NewEvent { event_content: EventContent::Create(Create {
-            creator: alice.clone(),
-            room_version: Some(String::from("4")),
-            predecessor: None,
-            extra: HashMap::new(),
-        }), sender: alice, state_key: Some(String::new()), redacts: None, unsigned: None }, resolver).await?;
+        db.add_pdus(&[StoredPdu {
+            inner: VersionedPdu::V4(UnhashedPdu {
+                event_content: EventContent::Create(Create {
+                    creator: alice.clone(),
+                    room_version: Some(String::from("4")),
+                    predecessor: None,
+                    extra: HashMap::new(),
+                }),
+                room_id: String::from(room_id),
+                sender: alice.clone(),
+                state_key: Some(String::new()),
+                unsigned: None,
+                redacts: None,
+                origin: String::from("example.org"),
+                origin_server_ts: 0,
+                prev_events: Vec::new(),
+                depth: 0,
+                auth_events: Vec::new(),
+            }.finalize()),
+            auth_status: crate::validate::auth::AuthStatus::Pass,
+        }]).await?;
+        db.add_event(room_id, NewEvent {
+            event_content: EventContent::Member(Member {
+                avatar_url: None,
+                displayname: None,
+                membership: Membership::Join,
+                is_direct: false,
+            }),
+            sender: alice.clone(),
+            state_key: Some(alice.clone_inner()),
+            redacts: None,
+            unsigned: None
+        }, resolver).await?;
+        db.add_event(room_id, NewEvent {
+            event_content: EventContent::Name(Name {
+                name: String::from("one"),
+            }),
+            sender: alice.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+            unsigned: None,
+        }, resolver).await?;
         Ok(())
-    }
-/*
-    #[test]
-    fn simple() {
-        let rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
-        rt.block_on(simple_inner()).unwrap();
     }
 
-    async fn simple_inner() -> Result<(), Error> {
+    #[test]
+    fn linear() {
+        crate::init_tracing();
+        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        rt.block_on(linear_inner()).unwrap();
+    }
+
+    async fn linear_inner() -> Result<(), Error> {
         let storage_manager = crate::storage::mem::MemStorageManager::new();
         let db = storage_manager.get_handle().await?;
-        let state_resolver = StateResolver::new(storage_manager.get_handle().await?);
-        db.add_pdus();
+        let resolver = StateResolver::new(storage_manager.get_handle().await?);
+        construct_cursed_room(&*db, &resolver).await?;
+        let room_id = "!cursed:example.org";
+        let prev_events = db.get_prev_events(room_id).await?;
+        resolver.resolve("!cursed:example.org", &prev_events).await?;
         Ok(())
-    }*/
+    }
 }

@@ -5,7 +5,7 @@ use crate::util::MatrixId;
 
 use super::{Event, EventContent, room_version::v4::PduV4};
 
-mod v4;
+pub mod v4;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -83,9 +83,9 @@ impl VersionedPdu {
 
     // TODO: actually completely wrong
     // event_id should probably be stored in StoredPdu because it is not part of a pdu
-    pub fn event_id(&self) -> &str {
+    pub fn event_id(&self) -> String {
         match self {
-            VersionedPdu::V4(pdu) => &pdu.hashes.sha256,
+            VersionedPdu::V4(pdu) => pdu.event_id(),
         }
     }
 }
