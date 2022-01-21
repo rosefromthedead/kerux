@@ -184,7 +184,7 @@ pub trait Storage: Send + Sync {
 
     async fn add_pdus(&self, pdus: &[StoredPdu]) -> Result<(), Error>;
 
-    async fn get_prev_events(&self, room_id: &str) -> Result<Vec<String>, Error>;
+    async fn get_prev_events(&self, room_id: &str) -> Result<(Vec<String>, i64), Error>;
 
     async fn query_pdus<'a>(
         &self,

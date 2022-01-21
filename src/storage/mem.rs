@@ -206,18 +206,25 @@ impl Storage for MemStorageHandle {
         Ok(())
     }
 
-    async fn get_prev_events(&self, room_id: &str) -> Result<Vec<String>, Error> {
+    async fn get_prev_events(&self, room_id: &str) -> Result<(Vec<String>, i64), Error> {
         let db = self.inner.read().await;
         let room = db.rooms.get(room_id).ok_or(ErrorKind::RoomNotFound)?;
-        let mut prev_events = room.events.iter()
-            .map(|pdu| pdu.event_id())
-            .collect::<HashSet<_>>();
+        let mut prev_events = room.events.clone();
         for event in room.events.iter() {
             for prev in event.prev_events() {
-                prev_events.remove(&**prev);
+                prev_events.retain(|pdu| pdu.event_id() != *prev);
             }
         }
-        Ok(prev_events.into_iter().map(String::from).collect::<Vec<_>>())
+        let event_ids = prev_events
+            .iter()
+            .map(|pdu| pdu.event_id())
+            .collect::<Vec<_>>();
+        let max_depth = prev_events
+            .iter()
+            .map(|pdu| pdu.depth())
+            .max()
+            .unwrap_or(-1); // no events in room
+        Ok((event_ids, max_depth))
     }
 
     async fn query_pdus<'a>(
