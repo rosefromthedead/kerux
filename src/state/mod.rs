@@ -473,7 +473,7 @@ mod tests {
         let resolver = StateResolver::new(storage_manager.get_handle().await?);
         construct_cursed_room(&*db, &resolver).await?;
         let room_id = "!cursed:example.org";
-        let prev_events = db.get_prev_events(room_id).await?;
+        let (prev_events, _max_depth) = db.get_prev_events(room_id).await?;
         resolver.resolve("!cursed:example.org", &prev_events).await?;
         Ok(())
     }

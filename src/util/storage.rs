@@ -55,7 +55,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
         if let EventContent::Create(_) = event.event_content {
             panic!("wrong function");
         }
-        let prev_events = self.get_prev_events(room_id).await?;
+        let (prev_events, max_depth) = self.get_prev_events(room_id).await?;
         let state = state_resolver.resolve(room_id, &prev_events).await?;
 
         let mut auth_events = Vec::new();
@@ -90,8 +90,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
             origin,
             origin_server_ts: chrono::Utc::now().timestamp_millis(),
             prev_events,
-            // TODO
-            depth: i64::MAX,
+            depth: max_depth.saturating_add(1),
             auth_events,
         };
         let pdu = VersionedPdu::V4(unhashed.finalize());

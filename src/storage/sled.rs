@@ -404,9 +404,10 @@ impl Storage for SledStorageHandle {
         Ok(())
     }
 
-    async fn get_prev_events(&self, room_id: &str) -> Result<Vec<String>, Error> {
+    async fn get_prev_events(&self, room_id: &str) -> Result<(Vec<String>, i64), Error> {
+        let max_depth: i64 = self.headless_events.get_value(room_id)?.unwrap_or(-1);
         let mut prefix = String::from(room_id).into_bytes();
-        prefix.push(0);
+        prefix.push(b'~');
         self.headless_events.scan_prefix(&prefix)
             .keys()
             .map_ok(|k| k.split(|&b| b == b'~').nth(1).unwrap().to_owned())
@@ -415,6 +416,7 @@ impl Storage for SledStorageHandle {
             .collect::<Result<Vec<String>, sled::Error>>()
             .map_err(ErrorKind::SledError)
             .map_err(ErrorKind::into)
+            .map(|prev_events| (prev_events, max_depth))
     }
 
     async fn query_pdus<'a>(
