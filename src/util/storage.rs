@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use displaydoc::Display;
 use serde_json::Value as JsonValue;
 
-use crate::{error::Error, events::{EventContent, room::Membership, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::StateResolver, storage::Storage, util::MatrixId};
+use crate::{error::Error, events::{EventContent, room::Membership, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::{StateResolver, State}, storage::Storage, util::MatrixId};
 
 // TODO: builder pattern
 #[derive(Debug)]
@@ -28,6 +28,30 @@ pub enum AddEventError {
     InsufficientPowerLevel,
     /// The event to be added was invalid.
     InvalidEvent(String),
+}
+
+pub fn calc_auth_events(event: &NewEvent, state: &State) -> Vec<String> {
+    let mut auth_events = Vec::new();
+    auth_events.push(state.get(("m.room.create", "")).unwrap().to_string());
+    if let Some(power_levels_event) = state.get(("m.room.power_levels", "")) {
+        auth_events.push(power_levels_event.to_string());
+    }
+    if let Some(member_event) = state.get(("m.room.member", event.sender.as_str())) {
+        auth_events.push(member_event.to_string());
+    }
+    if let EventContent::Member(content) = &event.event_content {
+        if let Some(target_member_event) = state.get(("m.room.member", event.state_key.as_ref().unwrap())) {
+            auth_events.push(target_member_event.to_string());
+        }
+        if content.membership == Membership::Join
+            || content.membership == Membership::Invite {
+                if let Some(join_rules_event) = state.get(("m.room.join_rules", "")) {
+                    auth_events.push(join_rules_event.to_string());
+                }
+            }
+        // TODO: third party invites
+    }
+    auth_events
 }
 
 #[async_trait]
@@ -58,26 +82,7 @@ impl<'a> StorageExt for dyn Storage + 'a {
         let (prev_events, max_depth) = self.get_prev_events(room_id).await?;
         let state = state_resolver.resolve(room_id, &prev_events).await?;
 
-        let mut auth_events = Vec::new();
-        auth_events.push(state.get(("m.room.create", "")).unwrap().to_string());
-        if let Some(power_levels_event) = state.get(("m.room.power_levels", "")) {
-            auth_events.push(power_levels_event.to_string());
-        }
-        if let Some(member_event) = state.get(("m.room.member", event.sender.as_str())) {
-            auth_events.push(member_event.to_string());
-        }
-        if let EventContent::Member(content) = &event.event_content {
-            if let Some(target_member_event) = state.get(("m.room.member", event.state_key.as_ref().unwrap())) {
-                auth_events.push(target_member_event.to_string());
-            }
-            if content.membership == Membership::Join
-                || content.membership == Membership::Invite {
-                if let Some(join_rules_event) = state.get(("m.room.join_rules", "")) {
-                    auth_events.push(join_rules_event.to_string());
-                }
-            }
-            // TODO: third party invites
-        }
+        let auth_events = calc_auth_events(&event, &state);
 
         let origin = event.sender.domain().to_owned();
         let unhashed = UnhashedPdu {
