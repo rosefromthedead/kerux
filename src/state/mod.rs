@@ -421,6 +421,105 @@ mod tests {
 
     use super::StateResolver;
 
+    struct TestRoom<'db> {
+        db: &'db dyn Storage,
+        room_id: String,
+        /// depth -> list of events at that depth
+        depth_map: Vec<Vec<String>>,
+    }
+
+    impl<'a> TestRoom<'a> {
+        /// must only be called once per test, because it uses the same room id every time
+        async fn create<'db>(
+            db: &'db dyn Storage,
+            room_id: &str,
+            creator: &MatrixId,
+        ) -> Result<TestRoom<'db>, Error> {
+            let creation = UnhashedPdu {
+                event_content: EventContent::Create(Create {
+                    creator: creator.clone(),
+                    room_version: Some(String::from("4")),
+                    predecessor: None,
+                    extra: HashMap::new(),
+                }),
+                room_id: String::from(room_id),
+                sender: creator.clone(),
+                state_key: Some(String::new()),
+                unsigned: None,
+                redacts: None,
+                origin: String::from("example.org"),
+                origin_server_ts: 0,
+                prev_events: Vec::new(),
+                depth: 0,
+                auth_events: Vec::new(),
+            }.finalize();
+            let creation_id = creation.event_id();
+            db.add_pdus(&[StoredPdu {
+                inner: VersionedPdu::V4(creation),
+                auth_status: crate::validate::auth::AuthStatus::Pass,
+            }]).await?;
+            Ok(TestRoom {
+                db,
+                room_id: room_id.to_owned(),
+                depth_map: vec![vec![creation_id]],
+            })
+        }
+
+        /// Like `crate::util::storage::StorageExt::add_event`, but it allows you to specify depth,
+        /// which you usually don't want, but is very useful for testing.
+        async fn add(
+            &mut self,
+            depth: usize,
+            sender: &MatrixId,
+            content: impl Into<EventContent>,
+            state_key: Option<&str>,
+            state_resolver: &StateResolver,
+        ) -> Result<String, Error> {
+            let prev_depth = depth.checked_sub(1).unwrap();
+            let prev_events = &self.depth_map[prev_depth];
+            let state = state_resolver.resolve(&self.room_id, &prev_events).await?;
+
+            let new_event = NewEvent {
+                event_content: content.into(),
+                sender: sender.clone(),
+                state_key: state_key.map(String::from),
+                redacts: None,
+                unsigned: None,
+            };
+
+            let auth_events = crate::util::storage::calc_auth_events(&new_event, &state);
+            let pdu = VersionedPdu::V4(UnhashedPdu {
+                event_content: new_event.event_content,
+                room_id: self.room_id.clone(),
+                sender: new_event.sender,
+                state_key: new_event.state_key,
+                unsigned: None,
+                redacts: None,
+                origin: String::from("example.org"),
+                origin_server_ts: 0,
+                prev_events: prev_events.clone(),
+                depth: depth as i64,
+                auth_events,
+            }.finalize());
+            let event_id = pdu.event_id();
+
+            if self.depth_map.len() == depth {
+                self.depth_map.push(Vec::new());
+            } else if self.depth_map.len() < depth {
+                panic!("can't insert event there");
+            }
+            self.depth_map[depth].push(event_id.clone());
+
+            let auth_status = crate::validate::auth::auth_check_v1(self.db, &pdu, &state).await?;
+            self.db.add_pdus(&[StoredPdu {
+                inner: pdu,
+                auth_status,
+            }]).await?;
+
+            Ok(event_id)
+        }
+    }
+
     async fn construct_cursed_room(db: &dyn Storage, resolver: &StateResolver) -> Result<(), Error> {
         let room_id = "!cursed:example.org";
         let alice = MatrixId::new("alice", "example.org").unwrap();
@@ -480,10 +579,30 @@ mod tests {
         let storage_manager = crate::storage::mem::MemStorageManager::new();
         let db = storage_manager.get_handle().await?;
         let resolver = StateResolver::new(storage_manager.get_handle().await?);
-        construct_cursed_room(&*db, &resolver).await?;
-        let room_id = "!cursed:example.org";
-        let (prev_events, _max_depth) = db.get_prev_events(room_id).await?;
-        resolver.resolve("!cursed:example.org", &prev_events).await?;
+
+        let alice = MatrixId::new("alice", "example.org").unwrap();
+        let room_id = "!linear:example.org";
+        let mut room = TestRoom::create(&*db, room_id, &alice).await?;
+        let _alice_join = room.add(1, &alice, Member {
+            avatar_url: None,
+            displayname: None,
+            membership: Membership::Join,
+            is_direct: false,
+        }, Some(alice.as_str()), &resolver).await?;
+        let name1 = room.add(2, &alice, Name {
+            name: String::from("one"),
+        }, Some(""), &resolver).await?;
+
+        let state1 = resolver.resolve(room_id, &[name1.clone()]).await?;
+        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name, "one");
+
+        let name2 = room.add(3, &alice, Name {
+            name: String::from("two"),
+        }, Some(""), &resolver).await?;
+        let state2 = resolver.resolve(room_id, &[name2]).await?;
+        assert_eq!(state2.get_content::<Name>(&*db, "").await?.unwrap().name, "two");
+        let state1 = resolver.resolve(room_id, &[name1]).await?;
+        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name, "one");
         Ok(())
     }
 }
