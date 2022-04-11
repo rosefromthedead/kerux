@@ -1,8 +1,9 @@
 use std::{borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, convert::TryInto, iter::FromIterator, sync::{Arc, Mutex}};
 
+use futures::stream::{StreamExt, TryStreamExt};
 use tracing::trace;
 
-use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage};
+use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
 
 use super::StorageExt;
 
@@ -14,8 +15,12 @@ pub struct State {
 }
 
 impl State {
-    pub fn get<'s, 'k: 's>(&'s self, (event_type, state_key): (&'k str, &'k str)) -> Option<&'s str> {
-        let key = (Cow::from(event_type), Cow::from(state_key));
+    pub fn key<'k>((event_type, state_key): (&'k str, &'k str)) -> (Cow<'k, str>, Cow<'k, str>) {
+        (Cow::from(event_type), Cow::from(state_key))
+    }
+
+    pub fn get<'s, 'k: 's>(&'s self, key_strs: (&'k str, &'k str)) -> Option<&'s str> {
+        let key = Self::key(key_strs);
         self.map.get::<(Cow<'k, str>, Cow<'k, str>)>(&key).map(String::as_str)
     }
 
@@ -235,36 +240,19 @@ impl StateResolver {
         // STEP 4
         // iterative auth checks again
 
-        for (event, _) in events_with_closest_mainlines.into_iter() {
-            if let Some(state_key) = &event.state_key() {
-                let auth_event_keys_needed = auth_types_for_event(&event.inner());
-                let mut frankenstate = State {
-                    room_id: String::from(room_id),
-                    map: HashMap::new(),
-                };
-                for auth_event_id in event.auth_events().iter() {
-                    let auth_event = self.db.get_pdu(room_id, &auth_event_id).await?.unwrap();
-                    if auth_event.did_pass_auth() {
-                        frankenstate.insert_event(auth_event.inner());
-                    }
-                }
-                frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
-                let state_key = String::from(*state_key);
-                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key)), event.event_id().to_string());
-            }
-        }
+        let new_state_events = events_with_closest_mainlines
+            .iter()
+            .map(|(e, _m)| &e.inner)
+            .filter(|e| e.state_key().is_some());
+        let mut partially_resolved_state = self.iterative_auth_checks(State { room_id: room_id.to_owned(), map: partially_resolved_state }, new_state_events).await?;
 
         // STEP 5 ???????
 
         for (type_and_key, event_id) in unconflicted_state_map.into_iter() {
-            partially_resolved_state.insert(type_and_key, event_id);
+            partially_resolved_state.map.insert(type_and_key, event_id);
         }
 
-        Ok(State {
-            room_id: room_id.to_string(),
-            map: partially_resolved_state,  // not partially anymore lmao
-        })
+        Ok(partially_resolved_state) // not partially anymore lmao
     }
 
     async fn auth_chains(&self, room_id: &str, event_ids: &[String]) -> Result<HashSet<String>, Error> {
@@ -355,6 +343,45 @@ impl StateResolver {
         }
 
         Ok(ret)
+    }
+
+    async fn iterative_auth_checks<'this, 'pdu>(
+        &'this self,
+        mut state: State,
+        state_events: impl IntoIterator<Item = &'pdu VersionedPdu>,
+    ) -> Result<State, Error> {
+        for event in state_events {
+            // fetch everything referenced in event.auth_events
+            let future_iter = event
+                .auth_events()
+                .iter()
+                .map(|event_id| self.db.get_pdu(&state.room_id, event_id));
+            let auth_events = futures::stream::iter(future_iter)
+                .then(|f| f)
+                .try_filter_map(|opt| async { Ok(opt) })
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            // for auth checking, prefer events from state, otherwise fall back to auth_events
+            let mut frankenstate = state.clone();
+            for auth_key in auth_types_for_event(event) {
+                if !frankenstate.map.contains_key(&State::key(auth_key)) {
+                    let fallback_event = auth_events
+                        .iter()
+                        .find(|pdu| pdu.event_content().get_type() == auth_key.0 && pdu.state_key() == Some(auth_key.1));
+                    if let Some(pdu) = fallback_event {
+                        frankenstate.insert_event(&pdu.inner());
+                    }
+                }
+            }
+
+            // if it passes auth now, we can add it to the state
+            if crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await? == AuthStatus::Pass {
+                state.insert_event(&event);
+            }
+        }
+
+        Ok(state)
     }
 }
 
