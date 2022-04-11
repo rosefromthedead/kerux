@@ -1,5 +1,7 @@
 use std::{borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, convert::TryInto, iter::FromIterator, sync::{Arc, Mutex}};
 
+use tracing::trace;
+
 use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage};
 
 use super::StorageExt;
@@ -49,14 +51,13 @@ impl StateResolver {
         }
     }
 
-    #[tracing::instrument(level = tracing::Level::DEBUG, skip(self))]
     pub async fn resolve(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
         self.resolve_v2(room_id, events).await
     }
 
+    #[tracing::instrument(level = tracing::Level::DEBUG, skip(self))]
     #[async_recursion::async_recursion]
     pub async fn resolve_v2(&self, room_id: &str, events: &[String]) -> Result<State, Error> {
-        tracing::trace!("resolving");
         if events.len() == 0 {
             return Ok(State {
                 room_id: room_id.to_owned(),
@@ -66,6 +67,7 @@ impl StateResolver {
 
         let key = BTreeSet::from_iter(events.iter().map(ToOwned::to_owned));
         if let Some(state) = self.cache.lock().unwrap().get(&key) {
+            trace!("state cache hit");
             return Ok(state.clone());
         }
 
@@ -73,11 +75,18 @@ impl StateResolver {
             let event = self.db.get_pdu(room_id, &events[0]).await?.unwrap();
             let mut state = self.resolve_v2(room_id, event.prev_events()).await?;
             if event.did_pass_auth() && event.state_key().is_some() {
+                trace!(
+                    event_type=event.event_content().get_type(),
+                    state_key=event.state_key().unwrap(),
+                    "applying one event on top of state"
+                );
                 state.insert_event(&event.inner());
             }
             self.cache.lock().unwrap().insert(BTreeSet::from_iter([events[0].clone()]), state.clone());
             return Ok(state);
         }
+
+        trace!("sad path");
 
         // event_id -> state
         let mut scratch = HashMap::new();
