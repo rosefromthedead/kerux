@@ -160,33 +160,34 @@ impl StateResolver {
             full_conflicted_set.remove(&**event_id);
         }
 
-        let events_list = self.reverse_topological_power_ordering(room_id, power_events).await?;
+        let ordered_power_event_ids = self.reverse_topological_power_ordering(room_id, power_events).await?;
 
         // STEP 2
         // where the auth checks happen ???
 
-        let mut partially_resolved_state = unconflicted_state_map.clone();
+        let partially_resolved_state = State {
+            room_id: room_id.to_owned(),
+            map: unconflicted_state_map.clone(),
+        };
 
-        for event_id in events_list {
-            let event = self.db.get_pdu(room_id, &event_id).await?.expect("event not found");
-            if let Some(state_key) = &event.state_key() {
-                let auth_event_keys_needed = auth_types_for_event(&event.inner());
-                let mut frankenstate = State {
-                    room_id: String::from(room_id),
-                    map: HashMap::new(),
-                };
-                for auth_event_id in event.auth_events().iter() {
-                    let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
-                    if auth_event.did_pass_auth() {
-                        frankenstate.insert_event(auth_event.inner());
-                    }
-                }
-                frankenstate.map.extend(partially_resolved_state.clone().into_iter());
-                crate::validate::auth::auth_check_v1(&*self.db, event.inner(), &frankenstate).await?;
-                let state_key = String::from(*state_key);
-                partially_resolved_state.insert((Cow::from(event.event_content().get_type().to_string()), Cow::from(state_key)), event_id.clone());
-            }
-        }
+        // fetch all of the power events
+        // TODO: fetch them further up, and pass a list of events to rtpo, instead of a set of
+        // event ids
+        let future_iter = ordered_power_event_ids
+            .iter()
+            .map(|event_id| self.db.get_pdu(&room_id, event_id));
+        let ordered_power_events = futures::stream::iter(future_iter)
+            .then(|f| f)
+            .try_filter_map(|opt| async { Ok(opt) })    // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
+            .try_collect::<Vec<_>>()
+            .await?;
+        let partially_resolved_state = self.iterative_auth_checks(
+            partially_resolved_state,
+            ordered_power_events
+                .iter()
+                .filter(|e| e.state_key().is_some())
+                .map(|e| e.inner())
+        ).await?;
 
         // STEP 3
         // mainline ordering D:
@@ -207,12 +208,12 @@ impl StateResolver {
 
         // i seriously have no idea what to do if this doesn't exist
         let mainline_starting_point = partially_resolved_state
-            .get(&(Cow::from("m.room.power_levels"), Cow::from(""))).expect("oh no");
-        let mut mainline = vec![mainline_starting_point.clone()];
-        let mut current = mainline_starting_point.clone();
+            .get(("m.room.power_levels", "")).expect("oh no");
+        let mut mainline = vec![mainline_starting_point.to_owned()];
+        let mut current = mainline_starting_point;
         while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap().inner().clone()).await? {
             mainline.push(parent.clone());
-            current = parent;
+            current = &mainline.last().unwrap();
         }
 
         // Tuple of event_id and index of closest mainline event to that event
@@ -244,7 +245,7 @@ impl StateResolver {
             .iter()
             .map(|(e, _m)| &e.inner)
             .filter(|e| e.state_key().is_some());
-        let mut partially_resolved_state = self.iterative_auth_checks(State { room_id: room_id.to_owned(), map: partially_resolved_state }, new_state_events).await?;
+        let mut partially_resolved_state = self.iterative_auth_checks(partially_resolved_state, new_state_events).await?;
 
         // STEP 5 ???????
 
@@ -345,10 +346,10 @@ impl StateResolver {
         Ok(ret)
     }
 
-    async fn iterative_auth_checks<'this, 'pdu>(
-        &'this self,
+    async fn iterative_auth_checks<'pdu>(
+        &self,
         mut state: State,
-        state_events: impl IntoIterator<Item = &'pdu VersionedPdu>,
+        state_events: impl Iterator<Item = &'pdu VersionedPdu>,
     ) -> Result<State, Error> {
         for event in state_events {
             // fetch everything referenced in event.auth_events
@@ -358,7 +359,7 @@ impl StateResolver {
                 .map(|event_id| self.db.get_pdu(&state.room_id, event_id));
             let auth_events = futures::stream::iter(future_iter)
                 .then(|f| f)
-                .try_filter_map(|opt| async { Ok(opt) })
+                .try_filter_map(|opt| async { Ok(opt) })    // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
                 .try_collect::<Vec<_>>()
                 .await?;
 
@@ -368,10 +369,9 @@ impl StateResolver {
                 if !frankenstate.map.contains_key(&State::key(auth_key)) {
                     let fallback_event = auth_events
                         .iter()
-                        .find(|pdu| pdu.event_content().get_type() == auth_key.0 && pdu.state_key() == Some(auth_key.1));
-                    if let Some(pdu) = fallback_event {
-                        frankenstate.insert_event(&pdu.inner());
-                    }
+                        .find(|pdu| pdu.event_content().get_type() == auth_key.0 && pdu.state_key() == Some(auth_key.1))
+                        .expect("auth event wasn't present in db");
+                    frankenstate.insert_event(&fallback_event.inner());
                 }
             }
 
