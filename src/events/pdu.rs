@@ -68,6 +68,13 @@ impl StoredPdu {
         self.inner.depth()
     }
 
+    pub fn redact(self) -> Self {
+        StoredPdu {
+            inner: self.inner.redact(),
+            auth_status: self.auth_status,
+        }
+    }
+
     // TODO: actually completely wrong
     // event_id should probably be stored in StoredPdu because it is not part of a pdu
     pub fn event_id(&self) -> String {

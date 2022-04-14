@@ -81,6 +81,12 @@ impl VersionedPdu {
         }
     }
 
+    pub fn redact(self) -> Self {
+        match self {
+            VersionedPdu::V4(pdu) => VersionedPdu::V4(pdu.redact()),
+        }
+    }
+
     // TODO: actually completely wrong
     // event_id should probably be stored in StoredPdu because it is not part of a pdu
     pub fn event_id(&self) -> String {

@@ -87,6 +87,24 @@ impl PduV4 {
         }
     }
 
+    pub fn redact(self) -> Self {
+        PduV4 {
+            event_content: self.event_content.redact(),
+            room_id: self.room_id,
+            sender: self.sender,
+            state_key: self.state_key,
+            unsigned: None,
+            redacts: None,
+            origin: self.origin,
+            origin_server_ts: self.origin_server_ts,
+            prev_events: self.prev_events,
+            depth: self.depth,
+            auth_events: self.auth_events,
+            hashes: self.hashes,
+            signatures: self.signatures,
+        }
+    }
+
     pub fn event_id(&self) -> String {
         // TODO: badly wrong
         format!("${}", self.hashes.sha256)
