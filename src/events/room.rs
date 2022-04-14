@@ -8,7 +8,9 @@ use crate::util::MatrixId;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Create {
     pub creator: MatrixId,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub room_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub predecessor: Option<PreviousRoom>,
     #[serde(flatten)]
     pub extra: HashMap<String, JsonValue>,
@@ -190,7 +192,8 @@ pub struct Member {
     pub avatar_url: Option<String>,
     pub displayname: Option<String>,
     pub membership: Membership,
-    pub is_direct: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_direct: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

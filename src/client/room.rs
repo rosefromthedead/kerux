@@ -77,7 +77,6 @@ pub async fn create_room(
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
     let room_version = req.room_version.unwrap_or("4".to_string());
-    let is_direct = req.is_direct.unwrap_or(false);
     if room_version != "4" {
         return Err(ErrorKind::UnsupportedRoomVersion.into());
     }
@@ -106,7 +105,7 @@ pub async fn create_room(
             avatar_url,
             displayname,
             membership: room::Membership::Join,
-            is_direct,
+            is_direct: req.is_direct,
         }
     };
     db.add_event(&room_id, NewEvent {
@@ -198,7 +197,7 @@ pub async fn create_room(
                 avatar_url: None,
                 displayname: None,
                 membership: room::Membership::Invite,
-                is_direct,
+                is_direct: req.is_direct,
             }),
             sender: user_id.clone(),
             state_key: Some(invitee),
@@ -239,7 +238,7 @@ pub async fn invite(
             avatar_url: invitee_profile.avatar_url,
             displayname: invitee_profile.displayname,
             membership: room::Membership::Invite,
-            is_direct: false,
+            is_direct: Some(false),
         }),
         sender: user_id.clone(),
         state_key: Some(invitee.clone_inner()),
@@ -271,7 +270,7 @@ pub async fn join_by_id_or_alias(
             avatar_url: profile.avatar_url,
             displayname: profile.displayname,
             membership: room::Membership::Join,
-            is_direct: false,
+            is_direct: Some(false),
         }),
         sender: user_id.clone(),
         state_key: Some(user_id.to_string()),
