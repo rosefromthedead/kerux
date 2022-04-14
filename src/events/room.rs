@@ -8,8 +8,10 @@ use crate::util::MatrixId;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Create {
     pub creator: MatrixId,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room_version: Option<String>,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predecessor: Option<PreviousRoom>,
     #[serde(flatten)]
@@ -89,7 +91,9 @@ pub struct PowerLevels {
     pub state_default: Option<u32>,
     pub users: HashMap<MatrixId, u32>,
     pub users_default: Option<u32>,
-    pub notifications: Notifications,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notifications: Option<Notifications>,
 }
 
 impl PowerLevels {
@@ -110,7 +114,7 @@ impl PowerLevels {
             state_default: Some(0),
             users,
             users_default: Some(0),
-            notifications: Notifications::default(),
+            notifications: None,
         }
     }
 
@@ -140,6 +144,10 @@ impl PowerLevels {
 
     pub fn users_default(&self) -> u32 {
         self.users_default.unwrap_or(0)
+    }
+
+    pub fn notifications(&self) -> Notifications {
+        self.notifications.unwrap_or_default()
     }
 
     pub fn get_user_level(&self, user_id: &MatrixId) -> u32 {
@@ -173,7 +181,7 @@ impl Default for PowerLevels {
             state_default: Some(50),
             users: HashMap::new(),
             users_default: Some(50),
-            notifications: Notifications::default(),
+            notifications: Default::default(),
         }
     }
 }
@@ -189,9 +197,14 @@ impl Default for Notifications {
 /// m.room.member
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Member {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub displayname: Option<String>,
     pub membership: Membership,
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_direct: Option<bool>,
 }
@@ -238,5 +251,6 @@ impl ToString for Membership {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Redaction {
-    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
