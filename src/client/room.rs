@@ -154,7 +154,7 @@ pub async fn create_room(
         unsigned: None,
     }, &state.state_resolver).await?;
     db.add_event(&room_id, NewEvent {
-        event_content: EventContent::GuestAccess(room::GuestAccess { guest_access }),
+        event_content: EventContent::GuestAccess(room::GuestAccess { guest_access: Some(guest_access) }),
         sender: user_id.clone(),
         state_key: Some(String::new()),
         redacts: None,
@@ -173,7 +173,7 @@ pub async fn create_room(
 
     if let Some(name) = req.name {
         db.add_event(&room_id, NewEvent {
-            event_content: EventContent::Name(room::Name { name }),
+            event_content: EventContent::Name(room::Name { name: Some(name) }),
             sender: user_id.clone(),
             state_key: Some(String::new()),
             redacts: None,
@@ -183,7 +183,7 @@ pub async fn create_room(
 
     if let Some(topic) = req.topic {
         db.add_event(&room_id, NewEvent {
-            event_content: EventContent::Topic(room::Topic { topic }),
+            event_content: EventContent::Topic(room::Topic { topic: Some(topic) }),
             sender: user_id.clone(),
             state_key: Some(String::new()),
             redacts: None,

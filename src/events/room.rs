@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use crate::util::MatrixId;
 
+use super::Redactable;
+
 /// m.room.create
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Create {
@@ -24,6 +26,17 @@ pub struct PreviousRoom {
     pub event_id: String,
 }
 
+impl Redactable for Create {
+    fn redact(self) -> Self {
+        Create {
+            creator: self.creator,
+            room_version: None,
+            predecessor: None,
+            extra: HashMap::new(),
+        }
+    }
+}
+
 /// m.room.join_rules
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct JoinRules {
@@ -37,6 +50,12 @@ pub enum JoinRule {
     Knock,
     Invite,
     Private,
+}
+
+impl Redactable for JoinRules {
+    fn redact(self) -> Self {
+        self
+    }
 }
 
 /// m.room.history_visibility
@@ -54,10 +73,25 @@ pub enum HistoryVisibilityType {
     WorldReadable,
 }
 
+impl Redactable for HistoryVisibility {
+    fn redact(self) -> Self {
+        self
+    }
+}
+
 /// m.room.guest_access
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GuestAccess {
-    pub guest_access: GuestAccessType,
+    /// expected to only be None when redacted
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_access: Option<GuestAccessType>,
+}
+
+impl Redactable for GuestAccess {
+    fn redact(self) -> Self {
+        GuestAccess { guest_access: None }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,13 +104,31 @@ pub enum GuestAccessType {
 /// m.room.name
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Name {
-    pub name: String,
+    /// expected to only be None when redacted
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Redactable for Name {
+    fn redact(self) -> Self {
+        Name { name: None }
+    }
 }
 
 /// m.room.topic
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Topic {
-    pub topic: String,
+    /// expected to only be None when redacted
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+}
+
+impl Redactable for Topic {
+    fn redact(self) -> Self {
+        Topic { topic: None }
+    }
 }
 
 /// m.room.power_levels
@@ -147,7 +199,7 @@ impl PowerLevels {
     }
 
     pub fn notifications(&self) -> Notifications {
-        self.notifications.unwrap_or_default()
+        self.notifications.clone().unwrap_or_default()
     }
 
     pub fn get_user_level(&self, user_id: &MatrixId) -> u32 {
@@ -161,6 +213,23 @@ impl PowerLevels {
             self.events_default.unwrap_or(0)
         };
         self.events.get(event_type).copied().unwrap_or(default)
+    }
+}
+
+impl Redactable for PowerLevels {
+    fn redact(self) -> Self {
+        PowerLevels {
+            ban: self.ban,
+            invite: None,
+            kick: self.kick,
+            redact: self.redact,
+            events: self.events,
+            events_default: self.events_default,
+            state_default: self.state_default,
+            users: self.users,
+            users_default: self.users_default,
+            notifications: None,
+        }
     }
 }
 
@@ -219,6 +288,17 @@ pub enum Membership {
     Ban,
 }
 
+impl Redactable for Member {
+    fn redact(self) -> Self {
+        Member {
+            avatar_url: None,
+            displayname: None,
+            membership: self.membership,
+            is_direct: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct InvalidMembership(String);
 
@@ -253,4 +333,10 @@ impl ToString for Membership {
 pub struct Redaction {
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+}
+
+impl Redactable for Redaction {
+    fn redact(self) -> Self {
+        Redaction { reason: None }
+    }
 }

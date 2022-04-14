@@ -12,6 +12,10 @@ pub trait EventType: std::convert::TryFrom<EventContent> + Into<EventContent> {
     const EVENT_TYPE: &'static str;
 }
 
+pub trait Redactable {
+    fn redact(self) -> Self;
+}
+
 macro_rules! define_event_content {
     (
         $(#[$attr:meta])*
@@ -87,6 +91,22 @@ macro_rules! define_event_content {
                     $variant_name(v) => serde_json::to_value(&v).unwrap(),
                     )*
                     Unknown { content, .. } => content.clone(),
+                }
+            }
+
+            pub fn redact(self) -> Self {
+                use EventContent::*;
+                match self {
+                    $(
+                    $variant_name(content) => $variant_name(Redactable::redact(content)),
+                    )*
+
+                    Unknown { ty, content: _ } => {
+                        Unknown {
+                            ty,
+                            content: serde_json::json!({}),
+                        }
+                    }
                 }
             }
         }
