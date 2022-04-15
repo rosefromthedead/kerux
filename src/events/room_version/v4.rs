@@ -65,8 +65,11 @@ impl UnhashedPdu {
     ///
     /// Does not add any signatures.
     pub fn finalize(self) -> PduV4 {
-        let json = to_canonical_json(&self).unwrap();
-        let sha256 = base64::encode_config(digest(&SHA256, json.as_bytes()).as_ref(), base64::URL_SAFE_NO_PAD);
+        let json = to_canonical_json(&self).expect("event doesn't meet canonical json reqs");
+        let content_hash = base64::encode_config(
+            digest(&SHA256, json.as_bytes()).as_ref(),
+            base64::URL_SAFE_NO_PAD,
+        );
         PduV4 {
             event_content: self.event_content,
             room_id: self.room_id,
@@ -79,7 +82,7 @@ impl UnhashedPdu {
             prev_events: self.prev_events,
             depth: self.depth,
             auth_events: self.auth_events,
-            hashes: EventHash { sha256 },
+            hashes: EventHash { sha256: content_hash },
             signatures: Some(Map::new()),
         }
     }
@@ -118,7 +121,15 @@ impl PduV4 {
     }
 
     pub fn event_id(&self) -> String {
-        // TODO: badly wrong
-        format!("${}", self.hashes.sha256)
+        let mut redacted = self.clone().redact();
+        redacted.signatures = None;
+        // age_ts doesn't exist, and unsigned already got blasted in redact()
+        let json = to_canonical_json(&redacted).expect("event doesn't meet canonical json reqs");
+        let mut event_id = base64::encode_config(
+            digest(&SHA256, json.as_bytes()).as_ref(),
+            base64::URL_SAFE_NO_PAD,
+        );
+        event_id.insert(0, '$');
+        event_id
     }
 }
