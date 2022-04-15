@@ -13,9 +13,13 @@ pub struct UnhashedPdu {
     pub event_content: EventContent,
     pub room_id: String,
     pub sender: MatrixId,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state_key: Option<String>,
     #[serde(skip)]
     pub unsigned: Option<JsonValue>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub redacts: Option<String>,
     pub origin: String,
     pub origin_server_ts: i64,
@@ -31,8 +35,14 @@ pub struct PduV4 {
     pub event_content: EventContent,
     pub room_id: String,
     pub sender: MatrixId,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state_key: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unsigned: Option<JsonValue>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub redacts: Option<String>,
     pub origin: String,
     pub origin_server_ts: i64,
@@ -40,7 +50,9 @@ pub struct PduV4 {
     pub depth: i64,
     pub auth_events: Vec<String>,
     pub hashes: EventHash,
-    pub signatures: Map<String, JsonValue>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signatures: Option<Map<String, JsonValue>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -68,7 +80,7 @@ impl UnhashedPdu {
             depth: self.depth,
             auth_events: self.auth_events,
             hashes: EventHash { sha256 },
-            signatures: Map::new(),
+            signatures: Some(Map::new()),
         }
     }
 }
