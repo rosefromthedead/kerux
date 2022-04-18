@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{Level, Span, instrument, field::Empty};
 
 use crate::{
-    client::auth::AccessToken,
+    client_api::auth::AccessToken,
     error::{Error, ErrorKind},
     util::MatrixId,
     ServerState,

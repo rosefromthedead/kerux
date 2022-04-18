@@ -7,7 +7,7 @@ mod room;
 mod room_events;
 mod user;
 
-pub fn cs_api(cfg: &mut web::ServiceConfig) {
+pub fn configure_endpoints(cfg: &mut web::ServiceConfig) {
     cfg.service(versions);
     let r0 = web::scope("/r0")
         .service(auth::get_supported_login_types)

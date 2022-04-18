@@ -10,7 +10,7 @@ use std::{
 use tokio::time::{Duration, delay_for};
 
 use crate::{
-    client::auth::AccessToken,
+    client_api::auth::AccessToken,
     error::{Error, ErrorKind},
     events::{
         Event, EventContent,

@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    client::auth::AccessToken,
+    client_api::auth::AccessToken,
     error::{Error, ErrorKind},
     events::{room, EventContent},
     storage::UserProfile,

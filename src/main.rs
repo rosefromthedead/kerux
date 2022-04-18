@@ -8,7 +8,7 @@ use state::StateResolver;
 use tracing_subscriber::EnvFilter;
 use std::sync::Arc;
 
-mod client;
+mod client_api;
 mod error;
 mod events;
 mod state;
@@ -68,7 +68,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         App::new()
             .data(Arc::clone(&server_state))
             .data(JsonConfig::default().error_handler(|e, _req| Error::from(e).into()))
-            .service(web::scope("/_matrix/client").configure(client::cs_api))
+            .service(web::scope("/_matrix/client").configure(client_api::configure_endpoints))
             .service(util::print_the_world)
     })
         .bind(&server_state2.config.bind_address)?
