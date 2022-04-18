@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 
-use crate::{ServerState, client::auth::AccessToken, error::{Error, ErrorKind}, storage::UserProfile, util::MatrixId};
+use crate::{ServerState, client_api::auth::AccessToken, error::{Error, ErrorKind}, storage::UserProfile, util::MatrixId};
 
 #[get("/profile/{user_id}/avatar_url")]
 #[instrument(skip(state), err = Level::DEBUG)]
