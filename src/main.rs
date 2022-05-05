@@ -6,11 +6,12 @@ use error::Error;
 use serde::Deserialize;
 use state::StateResolver;
 use tracing_subscriber::EnvFilter;
-use std::sync::Arc;
+use std::{sync::Arc, collections::HashMap};
 
 mod client_api;
 mod error;
 mod events;
+mod sign;
 mod state;
 mod storage;
 mod util;
@@ -30,6 +31,7 @@ pub struct ServerState {
     pub config: Config,
     pub db_pool: Box<dyn StorageManager>,
     pub state_resolver: StateResolver,
+    pub keys: HashMap<String, sign::Key>,
 }
 
 fn init_tracing() {
@@ -61,7 +63,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         _ => panic!("invalid storage type"),
     };
     let state_resolver = StateResolver::new(db_pool.get_handle().await?);
-    let server_state = Arc::new(ServerState { config, db_pool, state_resolver });
+    let keys = sign::load_keys(&std::env::current_dir().unwrap()).await?;
+    let server_state = Arc::new(ServerState { config, db_pool, state_resolver, keys });
 
     let server_state2 = Arc::clone(&server_state);
     actix_web::HttpServer::new(move || {
