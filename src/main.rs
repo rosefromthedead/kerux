@@ -11,6 +11,7 @@ use std::{sync::Arc, collections::HashMap};
 mod client_api;
 mod error;
 mod events;
+mod server_api;
 mod sign;
 mod state;
 mod storage;
