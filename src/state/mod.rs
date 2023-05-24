@@ -576,7 +576,7 @@ mod tests {
                 avatar_url: None,
                 displayname: None,
                 membership: Membership::Join,
-                is_direct: false,
+                is_direct: Some(false),
             }),
             sender: alice.clone(),
             state_key: Some(alice.clone_inner()),
@@ -585,7 +585,7 @@ mod tests {
         }, resolver).await?;
         db.add_event(room_id, NewEvent {
             event_content: EventContent::Name(Name {
-                name: String::from("one"),
+                name: Some(String::from("one")),
             }),
             sender: alice.clone(),
             state_key: Some(String::new()),
@@ -614,22 +614,22 @@ mod tests {
             avatar_url: None,
             displayname: None,
             membership: Membership::Join,
-            is_direct: false,
+            is_direct: Some(false),
         }, Some(alice.as_str()), &resolver).await?;
         let name1 = room.add(2, &alice, Name {
-            name: String::from("one"),
+            name: Some(String::from("one")),
         }, Some(""), &resolver).await?;
 
         let state1 = resolver.resolve(room_id, &[name1.clone()]).await?;
-        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name, "one");
+        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("one"));
 
         let name2 = room.add(3, &alice, Name {
-            name: String::from("two"),
+            name: Some(String::from("two")),
         }, Some(""), &resolver).await?;
         let state2 = resolver.resolve(room_id, &[name2]).await?;
-        assert_eq!(state2.get_content::<Name>(&*db, "").await?.unwrap().name, "two");
+        assert_eq!(state2.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("two"));
         let state1 = resolver.resolve(room_id, &[name1]).await?;
-        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name, "one");
+        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("one"));
         Ok(())
     }
 }
