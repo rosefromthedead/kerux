@@ -96,14 +96,12 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 let join_rule = state.get_content::<JoinRules>(db, "").await?
                     .map(|c| c.join_rule);
 
-                if join_rule == Some(JoinRule::Invite)
-                    && (membership == Some(Membership::Join) || membership == Some(Membership::Invite)) {
-                        return Ok(Pass);
-                    } else if join_rule == Some(JoinRule::Public) {
-                        return Ok(Pass);
-                    }
-
-                return Ok(Fail);
+                let status = if matches!((join_rule, membership), (Some(JoinRule::Invite | JoinRule::Public), Some(Membership::Join | Membership::Invite))) {
+                    Pass
+                } else {
+                    Fail
+                };
+                return Ok(status);
             },
             Membership::Invite => {
                 //TODO: third party invites
