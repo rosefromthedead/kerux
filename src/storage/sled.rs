@@ -408,7 +408,7 @@ impl Storage for SledStorageHandle {
             }
             self.headless_events
                 .insert(&format!("{}~{}", pdu.room_id(), pdu.event_id()), &[])?;
-            self.rooms.insert(pdu.room_id().clone(), &[])?;
+            self.rooms.insert(pdu.room_id(), &[])?;
         }
         Ok(())
     }

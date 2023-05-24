@@ -244,7 +244,7 @@ impl StateResolver {
         // mainline ordering D:
 
         let get_power_levels = |event: VersionedPdu| async move {
-            let auth_events = event.auth_events().clone();
+            let auth_events = event.auth_events();
             for auth_event_id in auth_events.iter() {
                 let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
                 match auth_event.event_content() {
