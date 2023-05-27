@@ -203,7 +203,10 @@ impl PowerLevels {
     }
 
     pub fn get_user_level(&self, user_id: &MatrixId) -> u32 {
-        self.users.get(user_id).copied().unwrap_or(self.users_default.unwrap_or(0))
+        self.users
+            .get(user_id)
+            .copied()
+            .unwrap_or(self.users_default.unwrap_or(0))
     }
 
     pub fn get_event_level(&self, event_type: &str, is_state_event: bool) -> u32 {
@@ -257,9 +260,7 @@ impl Default for PowerLevels {
 
 impl Default for Notifications {
     fn default() -> Self {
-        Notifications {
-            room: 50,
-        }
+        Notifications { room: 50 }
     }
 }
 
@@ -325,7 +326,8 @@ impl ToString for Membership {
             Join => "join",
             Knock => "knock",
             Leave => "leave",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 

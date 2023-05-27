@@ -1,8 +1,11 @@
 use std::{fmt::Display, str::Utf8Error, string::FromUtf8Error};
 
-use actix_web::{HttpResponse, ResponseError, dev::HttpResponseBuilder, error::JsonPayloadError, http::StatusCode};
+use actix_web::{
+    dev::HttpResponseBuilder, error::JsonPayloadError, http::StatusCode, HttpResponse,
+    ResponseError,
+};
 use displaydoc::Display;
-use serde_json::{Error as JsonError, json};
+use serde_json::{json, Error as JsonError};
 use tracing_error::SpanTrace;
 
 use crate::util::storage::AddEventError;
@@ -17,7 +20,10 @@ pub struct Error {
 impl<T: Into<ErrorKind>> From<T> for Error {
     fn from(inner: T) -> Self {
         let spantrace = tracing_error::SpanTrace::capture();
-        Error { inner: inner.into(), spantrace }
+        Error {
+            inner: inner.into(),
+            spantrace,
+        }
     }
 }
 
@@ -83,9 +89,15 @@ impl ResponseError for Error {
         match self.inner {
             Forbidden | UnknownToken | MissingToken | UsernameTaken => StatusCode::FORBIDDEN,
             NotFound | UserNotFound | RoomNotFound => StatusCode::NOT_FOUND,
-            BadJson(_) | NotJson(_) | MissingParam(_) | InvalidParam(_) | UnsupportedRoomVersion
-                | UrlNotUtf8(_) | PasswordError(_) | Unknown(_)
-                | TxnIdExists => StatusCode::BAD_REQUEST,
+            BadJson(_)
+            | NotJson(_)
+            | MissingParam(_)
+            | InvalidParam(_)
+            | UnsupportedRoomVersion
+            | UrlNotUtf8(_)
+            | PasswordError(_)
+            | Unknown(_)
+            | TxnIdExists => StatusCode::BAD_REQUEST,
             LimitExceeded => StatusCode::TOO_MANY_REQUESTS,
             AddEventError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             #[cfg(feature = "storage-sled")]
@@ -107,17 +119,16 @@ impl ResponseError for Error {
             MissingParam(_) => "M_MISSING_PARAM",
             InvalidParam(_) => "M_INVALID_PARAM",
             UnsupportedRoomVersion => "M_UNSUPPORTED_ROOM_VERSION",
-            TxnIdExists | UrlNotUtf8(_) | PasswordError(_)
-                | Unimplemented | AddEventError(_) | Unknown(_) => "M_UNKNOWN",
+            TxnIdExists | UrlNotUtf8(_) | PasswordError(_) | Unimplemented | AddEventError(_)
+            | Unknown(_) => "M_UNKNOWN",
             #[cfg(feature = "storage-sled")]
             SledError(_) | BincodeError(_) => "M_UNKNOWN",
         };
         let error = format!("{}", self);
-        HttpResponseBuilder::new(self.status_code())
-            .json(json!({
-                "errcode": errcode,
-                "error": error
-            }))
+        HttpResponseBuilder::new(self.status_code()).json(json!({
+            "errcode": errcode,
+            "error": error
+        }))
     }
 }
 

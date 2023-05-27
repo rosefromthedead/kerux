@@ -1,16 +1,19 @@
 use actix_web::{
     dev::Payload,
+    get, post,
     web::{Data, Json},
-    get, post, HttpRequest, FromRequest,
+    FromRequest, HttpRequest,
 };
-use tracing::{instrument, Level, span::Span, field::Empty};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{convert::TryFrom, sync::Arc};
+use tracing::{field::Empty, instrument, span::Span, Level};
 use uuid::Uuid;
 
 use crate::{
-    error::{Error, ErrorKind}, util::MatrixId, ServerState
+    error::{Error, ErrorKind},
+    util::MatrixId,
+    ServerState,
 };
 
 #[derive(Debug, Deserialize)]
@@ -33,10 +36,22 @@ impl FromRequest for AccessToken {
                 if !s.starts_with("Bearer ") {
                     return Err(ErrorKind::MissingToken);
                 }
-                let token = s.trim_start_matches("Bearer ").parse().map_err(|_| ErrorKind::UnknownToken)?;
+                let token = s
+                    .trim_start_matches("Bearer ")
+                    .parse()
+                    .map_err(|_| ErrorKind::UnknownToken)?;
                 Ok(token)
-            } else if let Some(pair) = req.uri().query().ok_or(ErrorKind::MissingToken)?.split('&').find(|pair| pair.starts_with("access_token")) {
-                let token = pair.trim_start_matches("access_token=").parse().map_err(|_| ErrorKind::UnknownToken)?;
+            } else if let Some(pair) = req
+                .uri()
+                .query()
+                .ok_or(ErrorKind::MissingToken)?
+                .split('&')
+                .find(|pair| pair.starts_with("access_token"))
+            {
+                let token = pair
+                    .trim_start_matches("access_token=")
+                    .parse()
+                    .map_err(|_| ErrorKind::UnknownToken)?;
                 Ok(token)
             } else {
                 Err(ErrorKind::MissingToken)
@@ -77,19 +92,11 @@ pub struct LoginRequest {
 #[serde(tag = "type")]
 enum Identifier {
     #[serde(rename = "m.id.user")]
-    Username {
-        user: String,
-    },
+    Username { user: String },
     #[serde(rename = "m.id.thirdparty")]
-    ThirdParty {
-        medium: String,
-        address: String,
-    },
+    ThirdParty { medium: String, address: String },
     #[serde(rename = "m.id.phone")]
-    Phone {
-        country: String,
-        phone: String,
-    },
+    Phone { country: String, phone: String },
 }
 
 #[derive(Serialize)]
@@ -117,7 +124,7 @@ pub async fn login(
                 Ok(mxid) => mxid.localpart().to_string(),
                 Err(_) => user,
             }
-        },
+        }
         _ => return Err(ErrorKind::Unimplemented.into()),
     };
     let password = req.password.ok_or(ErrorKind::Unimplemented)?;
@@ -127,7 +134,9 @@ pub async fn login(
         return Err(ErrorKind::Forbidden.into());
     }
 
-    let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
+    let device_id = req
+        .device_id
+        .unwrap_or(format!("{:08X}", rand::random::<u32>()));
     let access_token = db.create_access_token(&username, &device_id).await?;
 
     tracing::info!(username = username.as_str(), "User logged in");
@@ -153,7 +162,10 @@ pub async fn logout(state: Data<Arc<ServerState>>, token: AccessToken) -> Result
 
 #[post("/logout/all")]
 #[instrument(skip(state), err = Level::DEBUG)]
-pub async fn logout_all(state: Data<Arc<ServerState>>, token: AccessToken) -> Result<Json<()>, Error> {
+pub async fn logout_all(
+    state: Data<Arc<ServerState>>,
+    token: AccessToken,
+) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     db.delete_all_access_tokens(token.0).await?;
     Ok(Json(()))
@@ -176,12 +188,12 @@ pub struct RegisterRequest {
 pub async fn register(
     state: Data<Arc<ServerState>>,
     req: Json<RegisterRequest>,
-    http_req: HttpRequest
+    http_req: HttpRequest,
 ) -> Result<Json<serde_json::Value>, Error> {
     let req = req.into_inner();
     let query_string = http_req.query_string();
     match query_string.split('&').find(|s| s.starts_with("kind=")) {
-        Some("kind=user") => {},
+        Some("kind=user") => {}
         Some("kind=guest") => return Err(ErrorKind::Unimplemented.into()),
         Some(x) => return Err(ErrorKind::InvalidParam(x.to_string()).into()),
         None => return Err(ErrorKind::MissingParam("kind".to_string()).into()),
@@ -200,8 +212,12 @@ pub async fn register(
         })));
     }
 
-    let device_id = req.device_id.unwrap_or(format!("{:08X}", rand::random::<u32>()));
-    let access_token = db.create_access_token(&user_id.localpart(), &device_id).await?;
+    let device_id = req
+        .device_id
+        .unwrap_or(format!("{:08X}", rand::random::<u32>()));
+    let access_token = db
+        .create_access_token(&user_id.localpart(), &device_id)
+        .await?;
     let access_token = format!("{}", access_token.to_hyphenated());
 
     Ok(Json(json!({

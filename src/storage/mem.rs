@@ -2,12 +2,21 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc, time::{Duration, Instant},
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use tokio::sync::{RwLock, broadcast::{channel, Sender}};
+use tokio::sync::{
+    broadcast::{channel, Sender},
+    RwLock,
+};
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{EventContent, ephemeral::Typing, pdu::StoredPdu}, storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile}, util::MatrixId};
+use crate::{
+    error::{Error, ErrorKind},
+    events::{ephemeral::Typing, pdu::StoredPdu, EventContent},
+    storage::{Batch, EventQuery, QueryType, Storage, StorageManager, UserProfile},
+    util::MatrixId,
+};
 
 struct MemStorage {
     rooms: HashMap<String, Room>,
@@ -77,11 +86,7 @@ impl StorageManager for MemStorageManager {
 
 #[async_trait]
 impl Storage for MemStorageHandle {
-    async fn create_user(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<(), Error> {
+    async fn create_user(&self, username: &str, password: &str) -> Result<(), Error> {
         let salt: [u8; 16] = rand::random();
         let password_hash = argon2::hash_encoded(password.as_bytes(), &salt, &Default::default())?;
         let mut db = self.inner.write().await;
@@ -89,7 +94,8 @@ impl Storage for MemStorageHandle {
             return Err(ErrorKind::UsernameTaken.into());
         }
         db.users.push(User {
-            username: username.to_string(), password_hash: password_hash.to_string(),
+            username: username.to_string(),
+            password_hash: password_hash.to_string(),
             profile: UserProfile {
                 avatar_url: None,
                 displayname: None,
@@ -113,11 +119,7 @@ impl Storage for MemStorageHandle {
         }
     }
 
-    async fn create_access_token(
-        &self,
-        username: &str,
-        _device_id: &str,
-    ) -> Result<Uuid, Error> {
+    async fn create_access_token(&self, username: &str, _device_id: &str) -> Result<Uuid, Error> {
         let mut db = self.inner.write().await;
         let token = Uuid::new_v4();
         if db.users.iter().find(|u| u.username == username).is_none() {
@@ -190,12 +192,9 @@ impl Storage for MemStorageHandle {
         for pdu in pdus {
             match pdu.event_content() {
                 EventContent::Create(_) => {
-                    db.rooms.insert(
-                        pdu.room_id().to_string(),
-                        Room::new(),
-                    );
+                    db.rooms.insert(pdu.room_id().to_string(), Room::new());
                 }
-                _ => {},
+                _ => {}
             }
             db.rooms
                 .get_mut(pdu.room_id())
@@ -234,26 +233,23 @@ impl Storage for MemStorageHandle {
     ) -> Result<(Vec<StoredPdu>, usize), Error> {
         let mut ret = Vec::new();
         let (mut from, mut to) = match &query.query_type {
-            &QueryType::Timeline { from, to } => {
-                (from, to)
-            },
-            &QueryType::State { at, .. } => {
-                (0, at)
-            },
+            &QueryType::Timeline { from, to } => (from, to),
+            &QueryType::State { at, .. } => (0, at),
         };
 
         let db = self.inner.read().await;
-        let room = db.rooms.get(query.room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get(query.room_id).ok_or(ErrorKind::RoomNotFound)?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
 
         if let Some(range) = room.events.get(from..=to.unwrap()) {
             ret.extend(
-                range.iter()
-                .filter(|pdu| query.matches(&pdu.inner()))
-                .cloned());
+                range
+                    .iter()
+                    .filter(|pdu| query.matches(&pdu.inner()))
+                    .cloned(),
+            );
         }
 
         if wait && ret.is_empty() && query.query_type.is_timeline() {
@@ -273,22 +269,23 @@ impl Storage for MemStorageHandle {
 
         // same again
         let db = self.inner.read().await;
-        let room = db.rooms.get(query.room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get(query.room_id).ok_or(ErrorKind::RoomNotFound)?;
         if let None = to {
             to = Some(room.events.len() - 1);
         }
 
         if let Some(range) = room.events.get(from..=to.unwrap()) {
             ret.extend(
-                range.iter()
-                .filter(|pdu| query.matches(&pdu.inner()))
-                .cloned());
+                range
+                    .iter()
+                    .filter(|pdu| query.matches(&pdu.inner()))
+                    .cloned(),
+            );
         }
 
         if query.query_type.is_state() {
             ret.reverse();
-/*            let mut seen = HashSet::new();
+            /*            let mut seen = HashSet::new();
             // remove pdus that are older than another pdu with the same state key
             ret.retain(|pdu| {
                 seen.insert(pdu.state_key().to_string().unwrap())
@@ -304,11 +301,7 @@ impl Storage for MemStorageHandle {
         Ok(db.rooms.keys().cloned().collect())
     }
 
-    async fn get_pdu(
-        &self,
-        room_id: &str,
-        event_id: &str,
-    ) -> Result<Option<StoredPdu>, Error> {
+    async fn get_pdu(&self, room_id: &str, event_id: &str) -> Result<Option<StoredPdu>, Error> {
         let db = self.inner.read().await;
         let event = db
             .rooms
@@ -319,13 +312,9 @@ impl Storage for MemStorageHandle {
         Ok(event)
     }
 
-    async fn get_all_ephemeral(
-        &self,
-        room_id: &str,
-    ) -> Result<HashMap<String, JsonValue>, Error> {
+    async fn get_all_ephemeral(&self, room_id: &str) -> Result<HashMap<String, JsonValue>, Error> {
         let db = self.inner.read().await;
-        let room = db.rooms.get(room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get(room_id).ok_or(ErrorKind::RoomNotFound)?;
         let mut ephemeral = room.ephemeral.clone();
 
         let now = Instant::now();
@@ -333,7 +322,10 @@ impl Storage for MemStorageHandle {
         for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout > now) {
             typing.user_ids.insert(mxid.clone());
         }
-        ephemeral.insert(String::from("m.typing"), serde_json::to_value(typing).unwrap());
+        ephemeral.insert(
+            String::from("m.typing"),
+            serde_json::to_value(typing).unwrap(),
+        );
         Ok(ephemeral)
     }
 
@@ -343,15 +335,14 @@ impl Storage for MemStorageHandle {
         event_type: &str,
     ) -> Result<Option<JsonValue>, Error> {
         let db = self.inner.read().await;
-        let room = db.rooms.get(room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get(room_id).ok_or(ErrorKind::RoomNotFound)?;
         if event_type == "m.typing" {
             let now = Instant::now();
             let mut ret = Typing::default();
             for (mxid, _) in room.typing.iter().filter(|(_, timeout)| **timeout > now) {
                 ret.user_ids.insert(mxid.clone());
             }
-            return Ok(Some(serde_json::to_value(ret).unwrap()))
+            return Ok(Some(serde_json::to_value(ret).unwrap()));
         }
         Ok(room.ephemeral.get(event_type).cloned())
     }
@@ -362,10 +353,12 @@ impl Storage for MemStorageHandle {
         event_type: &str,
         content: Option<JsonValue>,
     ) -> Result<(), Error> {
-        assert!(event_type != "m.typing", "m.typing should not be set directly");
+        assert!(
+            event_type != "m.typing",
+            "m.typing should not be set directly"
+        );
         let mut db = self.inner.write().await;
-        let room = db.rooms.get_mut(room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get_mut(room_id).ok_or(ErrorKind::RoomNotFound)?;
         match content {
             Some(c) => room.ephemeral.insert(String::from(event_type), c),
             None => room.ephemeral.remove(event_type),
@@ -382,10 +375,12 @@ impl Storage for MemStorageHandle {
         timeout: u32,
     ) -> Result<(), Error> {
         let mut db = self.inner.write().await;
-        let room = db.rooms.get_mut(room_id)
-            .ok_or(ErrorKind::RoomNotFound)?;
+        let room = db.rooms.get_mut(room_id).ok_or(ErrorKind::RoomNotFound)?;
         if is_typing {
-            room.typing.insert(user_id.clone(), Instant::now() + Duration::from_millis(timeout as u64));
+            room.typing.insert(
+                user_id.clone(),
+                Instant::now() + Duration::from_millis(timeout as u64),
+            );
         } else {
             room.typing.remove(user_id);
         }

@@ -2,7 +2,17 @@ use std::{collections::HashMap, convert::TryFrom};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Error, events::{EventContent, room::{Create, JoinRule, JoinRules, Member, Membership, PowerLevels}, room_version::VersionedPdu}, state::State, storage::Storage, util::MatrixId};
+use crate::{
+    error::Error,
+    events::{
+        room::{Create, JoinRule, JoinRules, Member, Membership, PowerLevels},
+        room_version::VersionedPdu,
+        EventContent,
+    },
+    state::State,
+    storage::Storage,
+    util::MatrixId,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AuthStatus {
@@ -16,8 +26,12 @@ impl AuthStatus {
     }
 }
 
-pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) -> Result<AuthStatus, Error> {
-    use AuthStatus::{Pass, Fail};
+pub async fn auth_check_v1(
+    db: &dyn Storage,
+    pdu: &VersionedPdu,
+    state: &State,
+) -> Result<AuthStatus, Error> {
+    use AuthStatus::{Fail, Pass};
 
     // This function panics a lot eg when auth_events or prev_events don't exist. This is
     // intentional at the moment because if we're crafting a new event and we get that stuff
@@ -37,8 +51,17 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
 
     let mut auth_events = HashMap::new();
     for event_id in pdu.auth_events().iter() {
-        let pdu = db.get_pdu(&pdu.room_id(), event_id).await?.expect("auth event doesn't exist");
-        auth_events.insert((pdu.event_content().get_type().to_string(), pdu.state_key().expect("auth event isn't state").to_string()), pdu);
+        let pdu = db
+            .get_pdu(&pdu.room_id(), event_id)
+            .await?
+            .expect("auth event doesn't exist");
+        auth_events.insert(
+            (
+                pdu.event_content().get_type().to_string(),
+                pdu.state_key().expect("auth event isn't state").to_string(),
+            ),
+            pdu,
+        );
     }
 
     if !auth_events.contains_key(&("m.room.create".to_string(), "".to_string())) {
@@ -55,7 +78,9 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
     }
 
     let creator = state.get_content::<Create>(db, "").await?.unwrap().creator;
-    let power_levels = state.get_content::<PowerLevels>(db, "").await?
+    let power_levels = state
+        .get_content::<PowerLevels>(db, "")
+        .await?
         .unwrap_or_else(|| PowerLevels::no_event_default_levels(&creator));
 
     if let EventContent::Member(content) = &pdu.event_content() {
@@ -69,7 +94,9 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
 
                 // if the room has just been created by this user, allow them to join
                 if pdu.prev_events().len() == 1 {
-                    let prev_event = db.get_pdu(&pdu.room_id(), &pdu.prev_events()[0]).await?
+                    let prev_event = db
+                        .get_pdu(&pdu.room_id(), &pdu.prev_events()[0])
+                        .await?
                         .expect("prev_event doesn't exist");
                     if let EventContent::Create(create_content) = prev_event.event_content() {
                         if *pdu.sender() == create_content.creator {
@@ -84,7 +111,9 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 }
 
                 // get the user's membership in this room if they have one
-                let membership = state.get_content::<Member>(db, pdu.sender().as_str()).await?
+                let membership = state
+                    .get_content::<Member>(db, pdu.sender().as_str())
+                    .await?
                     .map(|c| c.membership);
 
                 // don't let banned users join
@@ -93,23 +122,29 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 }
 
                 // get the room's join rules
-                let join_rule = state.get_content::<JoinRules>(db, "").await?
+                let join_rule = state
+                    .get_content::<JoinRules>(db, "")
+                    .await?
                     .map(|c| c.join_rule);
 
                 if join_rule == Some(JoinRule::Invite)
-                    && (membership == Some(Membership::Join) || membership == Some(Membership::Invite)) {
-                        return Ok(Pass);
-                    } else if join_rule == Some(JoinRule::Public) {
-                        return Ok(Pass);
-                    }
+                    && (membership == Some(Membership::Join)
+                        || membership == Some(Membership::Invite))
+                {
+                    return Ok(Pass);
+                } else if join_rule == Some(JoinRule::Public) {
+                    return Ok(Pass);
+                }
 
                 return Ok(Fail);
-            },
+            }
             Membership::Invite => {
                 //TODO: third party invites
 
                 // get the sender's membership in this room if they have one
-                let sender_membership = state.get_content::<Member>(db, pdu.sender().as_str()).await?
+                let sender_membership = state
+                    .get_content::<Member>(db, pdu.sender().as_str())
+                    .await?
                     .map(|c| c.membership);
 
                 // can't invite people if you're not in the room yourdb
@@ -119,11 +154,13 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
 
                 // can't invite people if they're banned or already in
                 let target_user_id = pdu.state_key().clone().expect("invitation has no target");
-                let target_user_membership = state.get_content::<Member>(db, &target_user_id).await?
+                let target_user_membership = state
+                    .get_content::<Member>(db, &target_user_id)
+                    .await?
                     .map(|c| c.membership);
                 match target_user_membership {
                     Some(Membership::Join | Membership::Ban) => return Ok(Fail),
-                    _ => {},
+                    _ => {}
                 }
 
                 // can't invite people if you don't have permission to do so
@@ -132,9 +169,11 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 } else {
                     return Ok(Fail);
                 }
-            },
+            }
             Membership::Leave => {
-                let sender_membership = state.get_content::<Member>(db, pdu.sender().as_str()).await?
+                let sender_membership = state
+                    .get_content::<Member>(db, pdu.sender().as_str())
+                    .await?
                     .map(|c| c.membership);
 
                 // if a user is leaving of their own accord, only allow it if they were
@@ -152,29 +191,34 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 }
 
                 let target_user_id = pdu.state_key().clone().expect("kick has no target");
-                let target_user_membership = state.get_content::<Member>(db, &target_user_id).await?
+                let target_user_membership = state
+                    .get_content::<Member>(db, &target_user_id)
+                    .await?
                     .map(|c| c.membership);
 
                 // can't turn someone's ban to a kick if you don't have permission to unban
                 if target_user_membership == Some(Membership::Ban)
-                    && power_levels.get_user_level(&pdu.sender()) < power_levels.ban() {
-                        return Ok(Fail);
-                    }
+                    && power_levels.get_user_level(&pdu.sender()) < power_levels.ban()
+                {
+                    return Ok(Fail);
+                }
 
                 // can only kick someone if you have permission to kick, and they're lower than
                 // you in power level
                 let sender_level = power_levels.get_user_level(&pdu.sender());
                 let target_level = power_levels.get_user_level(
-                    &MatrixId::try_from(target_user_id).expect("target not valid matrix id")
-                    );
+                    &MatrixId::try_from(target_user_id).expect("target not valid matrix id"),
+                );
                 if sender_level >= power_levels.kick() && sender_level > target_level {
                     return Ok(Pass);
                 }
 
                 return Ok(Fail);
-            },
+            }
             Membership::Ban => {
-                let sender_membership = state.get_content::<Member>(db, pdu.sender().as_str()).await?
+                let sender_membership = state
+                    .get_content::<Member>(db, pdu.sender().as_str())
+                    .await?
                     .map(|c| c.membership);
 
                 // can't ban someone if you're not a member
@@ -185,8 +229,8 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
                 let sender_level = power_levels.get_user_level(&pdu.sender());
                 let target_user_id = pdu.state_key().clone().expect("ban has no target");
                 let target_level = power_levels.get_user_level(
-                    &MatrixId::try_from(target_user_id).expect("target not valid matrix id")
-                    );
+                    &MatrixId::try_from(target_user_id).expect("target not valid matrix id"),
+                );
 
                 if sender_level >= power_levels.ban() && sender_level > target_level {
                     return Ok(Pass);
@@ -198,7 +242,9 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
         }
     }
 
-    let sender_membership = state.get_content::<Member>(db, pdu.sender().as_str()).await?
+    let sender_membership = state
+        .get_content::<Member>(db, pdu.sender().as_str())
+        .await?
         .map(|c| c.membership);
 
     if sender_membership != Some(Membership::Join) {
@@ -215,7 +261,9 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
         }
     }
 
-    if user_level < power_levels.get_event_level(&pdu.event_content().get_type(), pdu.state_key().is_some()) {
+    if user_level
+        < power_levels.get_event_level(&pdu.event_content().get_type(), pdu.state_key().is_some())
+    {
         return Ok(Fail);
     }
 
@@ -236,33 +284,45 @@ pub async fn auth_check_v1(db: &dyn Storage, pdu: &VersionedPdu, state: &State) 
         let sender_level = old_power_levels.get_user_level(&pdu.sender());
 
         if old_power_levels.ban() != new_power_levels.ban()
-            && (old_power_levels.ban() > sender_level || new_power_levels.ban() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.ban() > sender_level || new_power_levels.ban() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.invite() != new_power_levels.invite()
-            && (old_power_levels.invite() > sender_level || new_power_levels.invite() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.invite() > sender_level
+                || new_power_levels.invite() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.kick() != new_power_levels.kick()
-            && (old_power_levels.kick() > sender_level || new_power_levels.kick() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.kick() > sender_level || new_power_levels.kick() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.redact() != new_power_levels.redact()
-            && (old_power_levels.redact() > sender_level || new_power_levels.redact() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.redact() > sender_level
+                || new_power_levels.redact() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.events_default() != new_power_levels.events_default()
-            && (old_power_levels.events_default() > sender_level || new_power_levels.events_default() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.events_default() > sender_level
+                || new_power_levels.events_default() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.state_default() != new_power_levels.state_default()
-            && (old_power_levels.state_default() > sender_level || new_power_levels.state_default() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.state_default() > sender_level
+                || new_power_levels.state_default() > sender_level)
+        {
+            return Ok(Fail);
+        }
         if old_power_levels.users_default() != new_power_levels.users_default()
-            && (old_power_levels.users_default() > sender_level || new_power_levels.users_default() > sender_level) {
-                return Ok(Fail);
-            }
+            && (old_power_levels.users_default() > sender_level
+                || new_power_levels.users_default() > sender_level)
+        {
+            return Ok(Fail);
+        }
 
         for (key, new_value) in new_power_levels.events.iter() {
             let old_value = old_power_levels.events.get(key);

@@ -3,9 +3,9 @@ use actix_web::{
     web::{Data, Json, Path},
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{Level, Span, instrument, field::Empty};
+use tracing::{field::Empty, instrument, Level, Span};
 
 use crate::{
     client_api::auth::AccessToken,
@@ -33,9 +33,11 @@ pub async fn typing(
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::Forbidden)?;
     Span::current().record("username", &username.as_str());
 
-    if (username.as_str(), state.config.domain.as_str()) != (user_id.localpart(), user_id.domain()) {
+    if (username.as_str(), state.config.domain.as_str()) != (user_id.localpart(), user_id.domain())
+    {
         return Err(ErrorKind::Forbidden.into());
     }
-    db.set_typing(&room_id, &user_id, req.typing, req.timeout).await?;
+    db.set_typing(&room_id, &user_id, req.typing, req.timeout)
+        .await?;
     Ok(Json(json!({})))
 }

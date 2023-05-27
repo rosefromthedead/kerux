@@ -1,19 +1,19 @@
-use actix_web::{post, web::{Data, Json, Path}};
-use tracing::{Level, Span, instrument, field::Empty};
-use serde::Deserialize;
-use serde_json::{Value as JsonValue, json};
-use std::{
-    collections::HashMap,
-    sync::Arc,
+use actix_web::{
+    post,
+    web::{Data, Json, Path},
 };
+use serde::Deserialize;
+use serde_json::{json, Value as JsonValue};
+use std::{collections::HashMap, sync::Arc};
+use tracing::{field::Empty, instrument, Level, Span};
 
 use crate::{
     client_api::auth::AccessToken,
     error::{Error, ErrorKind},
     events::{room, EventContent},
     storage::UserProfile,
-    util::{MatrixId, StorageExt, storage::NewEvent},
-    ServerState
+    util::{storage::NewEvent, MatrixId, StorageExt},
+    ServerState,
 };
 
 #[derive(Deserialize)]
@@ -83,24 +83,32 @@ pub async fn create_room(
 
     let room_id = format!("!{:016X}:{}", rand::random::<i64>(), state.config.domain);
 
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::Create(room::Create {
-            creator: user_id.clone(),
-            room_version: Some(room_version),
-            predecessor: None,
-            extra: match req.creation_content {
-                Some(v) => v,
-                None => HashMap::new(),
-            },
-        }),
-        sender: user_id.clone(),
-        state_key: Some(String::new()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::Create(room::Create {
+                creator: user_id.clone(),
+                room_version: Some(room_version),
+                predecessor: None,
+                extra: match req.creation_content {
+                    Some(v) => v,
+                    None => HashMap::new(),
+                },
+            }),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+            unsigned: None,
+        },
+        &state.state_resolver,
+    )
+    .await?;
 
     let creator_join = {
-        let UserProfile { avatar_url, displayname } = db.get_profile(&username).await?.unwrap();
+        let UserProfile {
+            avatar_url,
+            displayname,
+        } = db.get_profile(&username).await?.unwrap();
         room::Member {
             avatar_url,
             displayname,
@@ -108,26 +116,37 @@ pub async fn create_room(
             is_direct: req.is_direct,
         }
     };
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::Member(creator_join),
-        sender: user_id.clone(),
-        state_key: Some(user_id.clone_inner()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::Member(creator_join),
+            sender: user_id.clone(),
+            state_key: Some(user_id.clone_inner()),
+            redacts: None,
+            unsigned: None,
+        },
+        &state.state_resolver,
+    )
+    .await?;
 
     // TODO: default power levels a bit of a mess
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::PowerLevels(
-            req.power_level_content_override.unwrap_or_default()),
-        sender: user_id.clone(),
-        state_key: Some(String::new()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::PowerLevels(
+                req.power_level_content_override.unwrap_or_default(),
+            ),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+            unsigned: None,
+        },
+        &state.state_resolver,
+    )
+    .await?;
 
     let (join_rule, history_visibility, guest_access) = {
-        use room::{JoinRule::*, HistoryVisibilityType::*, GuestAccessType::*};
+        use room::{GuestAccessType::*, HistoryVisibilityType::*, JoinRule::*};
         let preset = req.preset.unwrap_or(match req.visibility {
             RoomVisibility::Private => Preset::PrivateChat,
             RoomVisibility::Public => Preset::PublicChat,
@@ -137,80 +156,115 @@ pub async fn create_room(
             Preset::PublicChat => (Public, Shared, Forbidden),
         }
     };
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::JoinRules(room::JoinRules { join_rule }),
-        sender: user_id.clone(),
-        state_key: Some(String::new()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
-            history_visibility
-        }),
-        sender: user_id.clone(),
-        state_key: Some(String::new()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
-    db.add_event(&room_id, NewEvent {
-        event_content: EventContent::GuestAccess(room::GuestAccess { guest_access: Some(guest_access) }),
-        sender: user_id.clone(),
-        state_key: Some(String::new()),
-        redacts: None,
-        unsigned: None,
-    }, &state.state_resolver).await?;
-
-    for event in req.initial_state.into_iter().flatten() {
-        db.add_event(&room_id, NewEvent {
-            event_content: EventContent::new(&event.ty, event.content)?,
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::JoinRules(room::JoinRules { join_rule }),
             sender: user_id.clone(),
-            state_key: Some(event.state_key),
+            state_key: Some(String::new()),
             redacts: None,
             unsigned: None,
-        }, &state.state_resolver).await?;
+        },
+        &state.state_resolver,
+    )
+    .await?;
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::HistoryVisibility(room::HistoryVisibility {
+                history_visibility,
+            }),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+            unsigned: None,
+        },
+        &state.state_resolver,
+    )
+    .await?;
+    db.add_event(
+        &room_id,
+        NewEvent {
+            event_content: EventContent::GuestAccess(room::GuestAccess {
+                guest_access: Some(guest_access),
+            }),
+            sender: user_id.clone(),
+            state_key: Some(String::new()),
+            redacts: None,
+            unsigned: None,
+        },
+        &state.state_resolver,
+    )
+    .await?;
+
+    for event in req.initial_state.into_iter().flatten() {
+        db.add_event(
+            &room_id,
+            NewEvent {
+                event_content: EventContent::new(&event.ty, event.content)?,
+                sender: user_id.clone(),
+                state_key: Some(event.state_key),
+                redacts: None,
+                unsigned: None,
+            },
+            &state.state_resolver,
+        )
+        .await?;
     }
 
     if let Some(name) = req.name {
-        db.add_event(&room_id, NewEvent {
-            event_content: EventContent::Name(room::Name { name: Some(name) }),
-            sender: user_id.clone(),
-            state_key: Some(String::new()),
-            redacts: None,
-            unsigned: None,
-        }, &state.state_resolver).await?;
+        db.add_event(
+            &room_id,
+            NewEvent {
+                event_content: EventContent::Name(room::Name { name: Some(name) }),
+                sender: user_id.clone(),
+                state_key: Some(String::new()),
+                redacts: None,
+                unsigned: None,
+            },
+            &state.state_resolver,
+        )
+        .await?;
     }
 
     if let Some(topic) = req.topic {
-        db.add_event(&room_id, NewEvent {
-            event_content: EventContent::Topic(room::Topic { topic: Some(topic) }),
-            sender: user_id.clone(),
-            state_key: Some(String::new()),
-            redacts: None,
-            unsigned: None,
-        }, &state.state_resolver).await?;
+        db.add_event(
+            &room_id,
+            NewEvent {
+                event_content: EventContent::Topic(room::Topic { topic: Some(topic) }),
+                sender: user_id.clone(),
+                state_key: Some(String::new()),
+                redacts: None,
+                unsigned: None,
+            },
+            &state.state_resolver,
+        )
+        .await?;
     }
 
     for invitee in req.invite.into_iter().flatten() {
-        db.add_event(&room_id, NewEvent {
-            event_content: EventContent::Member(room::Member {
-                avatar_url: None,
-                displayname: None,
-                membership: room::Membership::Invite,
-                is_direct: req.is_direct,
-            }),
-            sender: user_id.clone(),
-            state_key: Some(invitee),
-            redacts: None,
-            unsigned: None,
-        }, &state.state_resolver).await?;
+        db.add_event(
+            &room_id,
+            NewEvent {
+                event_content: EventContent::Member(room::Member {
+                    avatar_url: None,
+                    displayname: None,
+                    membership: room::Membership::Invite,
+                    is_direct: req.is_direct,
+                }),
+                sender: user_id.clone(),
+                state_key: Some(invitee),
+                redacts: None,
+                unsigned: None,
+            },
+            &state.state_resolver,
+        )
+        .await?;
     }
 
     tracing::info!(room_id = room_id.as_str(), "Created room");
 
-    Ok(Json(json!({
-        "room_id": room_id
-    })))
+    Ok(Json(json!({ "room_id": room_id })))
 }
 
 #[derive(Deserialize)]
@@ -231,7 +285,10 @@ pub async fn invite(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
     let invitee = req.into_inner().user_id;
-    let invitee_profile = db.get_profile(&invitee.localpart()).await?.unwrap_or_default();
+    let invitee_profile = db
+        .get_profile(&invitee.localpart())
+        .await?
+        .unwrap_or_default();
 
     let invite_event = NewEvent {
         event_content: EventContent::Member(room::Member {
@@ -246,7 +303,8 @@ pub async fn invite(
         unsigned: None,
     };
 
-    db.add_event(&room_id, invite_event, &state.state_resolver).await?;
+    db.add_event(&room_id, invite_event, &state.state_resolver)
+        .await?;
 
     Ok(Json(json!({})))
 }
@@ -278,9 +336,8 @@ pub async fn join_by_id_or_alias(
         unsigned: None,
     };
 
-    db.add_event(&room_id_or_alias, event, &state.state_resolver).await?;
+    db.add_event(&room_id_or_alias, event, &state.state_resolver)
+        .await?;
 
-    Ok(Json(serde_json::json!({
-        "room_id": room_id_or_alias
-    })))
+    Ok(Json(serde_json::json!({ "room_id": room_id_or_alias })))
 }

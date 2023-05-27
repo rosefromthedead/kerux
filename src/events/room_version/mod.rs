@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 
 use crate::util::MatrixId;
 
-use super::{Event, EventContent, room_version::v4::PduV4};
+use super::{room_version::v4::PduV4, Event, EventContent};
 
 pub mod v4;
 
@@ -75,7 +75,7 @@ impl VersionedPdu {
         }
     }
 
-    pub(in super) fn depth(&self) -> i64 {
+    pub(super) fn depth(&self) -> i64 {
         match self {
             VersionedPdu::V4(pdu) => pdu.depth,
         }

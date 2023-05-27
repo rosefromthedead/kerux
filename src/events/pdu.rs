@@ -3,7 +3,7 @@ use serde_json::Value as JsonValue;
 
 use crate::{events::EventContent, util::MatrixId, validate::auth::AuthStatus};
 
-use super::{Event, room_version::VersionedPdu};
+use super::{room_version::VersionedPdu, Event};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StoredPdu {

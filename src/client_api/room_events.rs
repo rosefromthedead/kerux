@@ -1,23 +1,20 @@
-use actix_web::{get, put, web::{Data, Json, Path, Query}};
+use actix_web::{
+    get, put,
+    web::{Data, Json, Path, Query},
+};
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as JsonValue, json};
-use tracing::{Level, Span, instrument, field::Empty};
-use std::{
-    collections::HashMap,
-    sync::Arc
-};
-use tokio::time::{Duration, delay_for};
+use serde_json::{json, Value as JsonValue};
+use std::{collections::HashMap, sync::Arc};
+use tokio::time::{delay_for, Duration};
+use tracing::{field::Empty, instrument, Level, Span};
 
 use crate::{
     client_api::auth::AccessToken,
     error::{Error, ErrorKind},
-    events::{
-        Event, EventContent,
-        room::Membership,
-    },
+    events::{room::Membership, Event, EventContent},
     storage::{EventQuery, QueryType},
-    util::{MatrixId, StorageExt, storage::NewEvent},
+    util::{storage::NewEvent, MatrixId, StorageExt},
     ServerState,
 };
 
@@ -155,15 +152,16 @@ pub async fn sync(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    let mut batch = db.get_batch(req.since.as_deref().unwrap_or("empty")).await?.unwrap_or_default();
+    let mut batch = db
+        .get_batch(req.since.as_deref().unwrap_or("empty"))
+        .await?
+        .unwrap_or_default();
     let next_batch_id = format!("{:x}", rand::random::<u64>());
     let mut res = SyncResponse {
         next_batch: next_batch_id.clone(),
         rooms: None,
         presence: None,
-        account_data: AccountData {
-            events: Vec::new(),
-        },
+        account_data: AccountData { events: Vec::new() },
     };
 
     let rooms = db.get_rooms().await?;
@@ -179,15 +177,20 @@ pub async fn sync(
             Membership::Join => {
                 batch.invites.remove(room_id);
                 let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
-                let (events, progress) = db.query_events(EventQuery {
-                    query_type: QueryType::Timeline { from, to: None },
-                    room_id,
-                    senders: &[],
-                    not_senders: &[],
-                    types: &[],
-                    not_types: &[],
-                    contains_json: None,
-                }, false).await?;
+                let (events, progress) = db
+                    .query_events(
+                        EventQuery {
+                            query_type: QueryType::Timeline { from, to: None },
+                            room_id,
+                            senders: &[],
+                            not_senders: &[],
+                            types: &[],
+                            not_types: &[],
+                            contains_json: None,
+                        },
+                        false,
+                    )
+                    .await?;
                 batch.rooms.insert(room_id.clone(), progress + 1);
 
                 let mut state_events = Vec::new();
@@ -204,18 +207,21 @@ pub async fn sync(
                     joined_member_count: joined,
                     invited_member_count: invited,
                 };
-                let state = State { events: state_events };
+                let state = State {
+                    events: state_events,
+                };
                 let timeline = Timeline {
                     events,
                     limited: false,
                     prev_batch: String::from("empty"),
                 };
                 let ephemeral = Ephemeral {
-                    events: db.get_all_ephemeral(room_id).await?.into_iter().map(
-                        |(k, v)| KvPair {
-                            ty: k,
-                            content: v,
-                        }).collect()
+                    events: db
+                        .get_all_ephemeral(room_id)
+                        .await?
+                        .into_iter()
+                        .map(|(k, v)| KvPair { ty: k, content: v })
+                        .collect(),
                 };
                 let account_data = AccountData { events: Vec::new() };
                 res.rooms.get_or_insert_with(Default::default).join.insert(
@@ -228,9 +234,11 @@ pub async fn sync(
                         account_data,
                     },
                 );
-            },
+            }
             Membership::Invite if !batch.invites.contains(room_id) => {
-                let events = db.get_full_state(&room_id).await?
+                let events = db
+                    .get_full_state(&room_id)
+                    .await?
                     .into_iter()
                     .map(|e| StrippedState {
                         content: e.event_content,
@@ -238,17 +246,18 @@ pub async fn sync(
                         sender: e.sender,
                     })
                     .collect();
-                res.rooms.get_or_insert_with(Default::default).invite.insert(
-                    room_id.clone(),
-                    InvitedRoom {
-                        invite_state: InviteState {
-                            events,
+                res.rooms
+                    .get_or_insert_with(Default::default)
+                    .invite
+                    .insert(
+                        room_id.clone(),
+                        InvitedRoom {
+                            invite_state: InviteState { events },
                         },
-                    },
-                );
+                    );
                 batch.invites.insert(room_id.clone());
             }
-            _ => {},
+            _ => {}
         }
     }
 
@@ -261,17 +270,21 @@ pub async fn sync(
     for (&room_id, _) in memberships.iter().filter(|(_, m)| **m == Membership::Join) {
         let from = batch.rooms.get(room_id).map(|v| *v).unwrap_or(0);
         let room_id_clone = String::from(room_id);
-        queries.push(db.query_events(EventQuery {
-            query_type: QueryType::Timeline {
-                from, to: None,
-            },
-            room_id,
-            senders: &[],
-            not_senders: &[],
-            types: &[],
-            not_types: &[],
-            contains_json: None,
-        }, true).map(move |r| (r, room_id_clone)));
+        queries.push(
+            db.query_events(
+                EventQuery {
+                    query_type: QueryType::Timeline { from, to: None },
+                    room_id,
+                    senders: &[],
+                    not_senders: &[],
+                    types: &[],
+                    not_types: &[],
+                    contains_json: None,
+                },
+                true,
+            )
+            .map(move |r| (r, room_id_clone)),
+        );
     }
     if queries.is_empty() {
         // user is not in any rooms. no point waiting for stuff to happen in them
@@ -333,10 +346,7 @@ pub async fn get_event(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    if db.get_membership(
-        &user_id,
-        &room_id
-    ).await? != Some(Membership::Join) {
+    if db.get_membership(&user_id, &room_id).await? != Some(Membership::Join) {
         return Err(ErrorKind::Forbidden.into());
     }
 
@@ -376,14 +386,14 @@ pub async fn get_state_event_inner(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    if db.get_membership(
-        &user_id,
-        &room_id
-    ).await? != Some(Membership::Join) {
+    if db.get_membership(&user_id, &room_id).await? != Some(Membership::Join) {
         return Err(ErrorKind::Forbidden.into());
     }
 
-    match db.get_state_event(&room_id, &event_type, &state_key).await? {
+    match db
+        .get_state_event(&room_id, &event_type, &state_key)
+        .await?
+    {
         Some(event) => Ok(Json(event)),
         None => Err(ErrorKind::NotFound.into()),
     }
@@ -401,11 +411,8 @@ pub async fn get_state(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    match db.get_membership(
-        &user_id,
-        &room_id
-    ).await? {
-        Some(Membership::Join) => {},
+    match db.get_membership(&user_id, &room_id).await? {
+        Some(Membership::Join) => {}
         Some(_) => return Err(ErrorKind::Unimplemented.into()),
         None => return Err(ErrorKind::Forbidden.into()),
     }
@@ -441,11 +448,8 @@ pub async fn get_members(
     Span::current().record("username", &username.as_str());
     let user_id = MatrixId::new(&username, &state.config.domain).unwrap();
 
-    match db.get_membership(
-        &user_id,
-        &room_id
-    ).await? {
-        Some(Membership::Join) => {},
+    match db.get_membership(&user_id, &room_id).await? {
+        Some(Membership::Join) => {}
         Some(_) => return Err(ErrorKind::Unimplemented.into()),
         None => return Err(ErrorKind::Forbidden.into()),
     }
@@ -454,8 +458,15 @@ pub async fn get_members(
     state.retain(|event| {
         if let EventContent::Member(ref content) = &event.event_content {
             let membership = &content.membership;
-            (if let Some(filter) = &req.membership { membership == filter } else { true }
-             && if let Some(exclude) = &req.not_membership { membership != exclude } else { true })
+            (if let Some(filter) = &req.membership {
+                membership == filter
+            } else {
+                true
+            } && if let Some(exclude) = &req.not_membership {
+                membership != exclude
+            } else {
+                true
+            })
         } else {
             false
         }
@@ -494,9 +505,7 @@ pub async fn send_state_event(
 
     tracing::trace!(event_id = &event_id.as_str(), "Added event");
 
-    Ok(Json(SendEventResponse {
-        event_id,
-    }))
+    Ok(Json(SendEventResponse { event_id }))
 }
 
 #[put("/rooms/{room_id}/send/{event_type}/{txn_id}")]
@@ -520,7 +529,7 @@ pub async fn send_event(
         sender: user_id.clone(),
         state_key: None,
         redacts: None,
-        unsigned: Some(json!({"transaction_id": txn_id})),
+        unsigned: Some(json!({ "transaction_id": txn_id })),
     };
 
     //TODO: is this right in the eyes of the spec? also does it matter?
@@ -529,7 +538,5 @@ pub async fn send_event(
 
     tracing::trace!(event_id = &event_id.as_str(), "Added event");
 
-    Ok(Json(SendEventResponse {
-        event_id,
-    }))
+    Ok(Json(SendEventResponse { event_id }))
 }

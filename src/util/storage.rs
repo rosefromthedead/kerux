@@ -2,7 +2,18 @@ use async_trait::async_trait;
 use displaydoc::Display;
 use serde_json::Value as JsonValue;
 
-use crate::{error::Error, events::{EventContent, room::Membership, room_version::{VersionedPdu, v4::UnhashedPdu}, pdu::StoredPdu}, state::{StateResolver, State}, storage::Storage, util::MatrixId};
+use crate::{
+    error::Error,
+    events::{
+        pdu::StoredPdu,
+        room::Membership,
+        room_version::{v4::UnhashedPdu, VersionedPdu},
+        EventContent,
+    },
+    state::{State, StateResolver},
+    storage::Storage,
+    util::MatrixId,
+};
 
 // TODO: builder pattern
 #[derive(Debug)]
@@ -40,15 +51,16 @@ pub fn calc_auth_events(event: &NewEvent, state: &State) -> Vec<String> {
         auth_events.push(member_event.to_string());
     }
     if let EventContent::Member(content) = &event.event_content {
-        if let Some(target_member_event) = state.get(("m.room.member", event.state_key.as_ref().unwrap())) {
+        if let Some(target_member_event) =
+            state.get(("m.room.member", event.state_key.as_ref().unwrap()))
+        {
             auth_events.push(target_member_event.to_string());
         }
-        if content.membership == Membership::Join
-            || content.membership == Membership::Invite {
-                if let Some(join_rules_event) = state.get(("m.room.join_rules", "")) {
-                    auth_events.push(join_rules_event.to_string());
-                }
+        if content.membership == Membership::Join || content.membership == Membership::Invite {
+            if let Some(join_rules_event) = state.get(("m.room.join_rules", "")) {
+                auth_events.push(join_rules_event.to_string());
             }
+        }
         // TODO: third party invites
     }
     auth_events
@@ -114,42 +126,56 @@ impl<'a> StorageExt for dyn Storage + 'a {
     //TODO: check return type
     //TODO: should we handle users that aren't in the room
     async fn get_sender_power_level(&self, room_id: &str, event_id: &str) -> Result<u32, Error> {
-        let event = self.get_pdu(room_id, event_id).await?.expect("event not found");
+        let event = self
+            .get_pdu(room_id, event_id)
+            .await?
+            .expect("event not found");
         let mut create_event_content = None;
         for auth_event_id in event.auth_events().iter() {
-            let auth_event = self.get_pdu(room_id, auth_event_id).await?.expect("event not found");
+            let auth_event = self
+                .get_pdu(room_id, auth_event_id)
+                .await?
+                .expect("event not found");
             match auth_event.event_content() {
                 EventContent::PowerLevels(levels) => {
                     return Ok(levels.get_user_level(event.sender()));
-                },
+                }
                 EventContent::Create(create) => {
                     create_event_content = Some(create.clone());
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
 
         // at this point there is no power levels event
-        if *event.sender() == create_event_content.expect("event has no create in auth").creator {
+        if *event.sender()
+            == create_event_content
+                .expect("event has no create in auth")
+                .creator
+        {
             return Ok(100);
         } else {
             return Ok(0);
         }
     }
 
-
-
     async fn create_test_users(&self) -> Result<(), Error> {
         // all passwords are "password"
-        self.create_user("alice",
-            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        ).await?;
-        self.create_user("bob",
-            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        ).await?;
-        self.create_user("carol",
-            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM"
-        ).await?;
+        self.create_user(
+            "alice",
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM",
+        )
+        .await?;
+        self.create_user(
+            "bob",
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM",
+        )
+        .await?;
+        self.create_user(
+            "carol",
+            "$argon2i$v=19$m=4096,t=3,p=1$c2FsdHNhbHQ$llvUdqp69y2RB629dCuG42kR5y+Occ/ziKV5kn3rSOM",
+        )
+        .await?;
         Ok(())
     }
 }

@@ -1,9 +1,12 @@
-use ring::digest::{SHA256, digest};
+use ring::digest::{digest, SHA256};
 use serde::{Deserialize, Serialize};
 use serde_canonical::ser::to_string as to_canonical_json;
 use serde_json::{Map, Value as JsonValue};
 
-use crate::{events::{Event, EventContent}, util::MatrixId};
+use crate::{
+    events::{Event, EventContent},
+    util::MatrixId,
+};
 
 /// An unhashed (incomplete) Persistent Data Unit for room version 4.
 /// This can only be used to construct a complete, hashed PDU.
@@ -82,7 +85,9 @@ impl UnhashedPdu {
             prev_events: self.prev_events,
             depth: self.depth,
             auth_events: self.auth_events,
-            hashes: EventHash { sha256: content_hash },
+            hashes: EventHash {
+                sha256: content_hash,
+            },
             signatures: Some(Map::new()),
         }
     }

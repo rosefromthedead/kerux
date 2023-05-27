@@ -17,7 +17,12 @@ use sled::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{error::{Error, ErrorKind}, events::{ephemeral::Typing, pdu::StoredPdu}, storage::{Storage, StorageManager}, util::MatrixId};
+use crate::{
+    error::{Error, ErrorKind},
+    events::{ephemeral::Typing, pdu::StoredPdu},
+    storage::{Storage, StorageManager},
+    util::MatrixId,
+};
 
 use super::{Batch, EventQuery, QueryType, UserProfile};
 
@@ -228,27 +233,33 @@ impl SledStorageHandle {
         }
     }
 
-    async fn get_events(&self, ordering_tree: &Tree, query: &EventQuery<'_>, from: usize, to: Option<usize>) -> Result<(Vec<StoredPdu>, usize), Error> {
+    async fn get_events(
+        &self,
+        ordering_tree: &Tree,
+        query: &EventQuery<'_>,
+        from: usize,
+        to: Option<usize>,
+    ) -> Result<(Vec<StoredPdu>, usize), Error> {
         let mut ret = Vec::new();
 
         let from_bytes = from.to_be_bytes();
         let to_bytes = to.clone().map(usize::to_be_bytes);
         let pdu_iter = match to_bytes {
-                Some(to_bytes) => ordering_tree.range(from_bytes..=to_bytes),
-                None => ordering_tree.range(from_bytes..),
-            }
-            .map_ok(|(_key, event_id)| {
-                self.events.get(&format!(
-                        "{}_{}",
-                        query.room_id,
-                        String::from_utf8(Vec::from(event_id.as_ref())).unwrap()
-                        ))
-            })
-            // flatten
-            .map(|res| match res {
-                Ok(Ok(v)) => Ok(v),
-                Ok(Err(e)) | Err(e) => Err(e),
-            });
+            Some(to_bytes) => ordering_tree.range(from_bytes..=to_bytes),
+            None => ordering_tree.range(from_bytes..),
+        }
+        .map_ok(|(_key, event_id)| {
+            self.events.get(&format!(
+                "{}_{}",
+                query.room_id,
+                String::from_utf8(Vec::from(event_id.as_ref())).unwrap()
+            ))
+        })
+        // flatten
+        .map(|res| match res {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) | Err(e) => Err(e),
+        });
         for pdu in pdu_iter {
             // is Ok(None) if the event is not present, but it must be present if it's in the
             // ordering tree
@@ -292,11 +303,7 @@ impl Storage for SledStorageHandle {
         }
     }
 
-    async fn create_access_token(
-        &self,
-        username: &str,
-        device_id: &str,
-    ) -> Result<Uuid, Error> {
+    async fn create_access_token(&self, username: &str, device_id: &str) -> Result<Uuid, Error> {
         let token = Uuid::new_v4();
         if !self.users.contains_key(username)? {
             return Err(ErrorKind::UserNotFound.into());
@@ -396,9 +403,11 @@ impl Storage for SledStorageHandle {
                 }
             }
             for prev_event in pdu.prev_events() {
-                self.headless_events.remove(&format!("{}~{}", pdu.room_id(), prev_event))?;
+                self.headless_events
+                    .remove(&format!("{}~{}", pdu.room_id(), prev_event))?;
             }
-            self.headless_events.insert(&format!("{}~{}", pdu.room_id(), pdu.event_id()), &[])?;
+            self.headless_events
+                .insert(&format!("{}~{}", pdu.room_id(), pdu.event_id()), &[])?;
             self.rooms.insert(pdu.room_id().clone(), &[])?;
         }
         Ok(())
@@ -408,7 +417,8 @@ impl Storage for SledStorageHandle {
         let max_depth: i64 = self.headless_events.get_value(room_id)?.unwrap_or(-1);
         let mut prefix = String::from(room_id).into_bytes();
         prefix.push(b'~');
-        self.headless_events.scan_prefix(&prefix)
+        self.headless_events
+            .scan_prefix(&prefix)
             .keys()
             .map_ok(|k| k.split(|&b| b == b'~').nth(1).unwrap().to_owned())
             .map_ok(String::from_utf8)
@@ -450,7 +460,8 @@ impl Storage for SledStorageHandle {
     }
 
     async fn get_rooms(&self) -> Result<Vec<String>, Error> {
-        self.rooms.iter()
+        self.rooms
+            .iter()
             .map_ok(|(key, _value)| String::from_utf8(Vec::from(key.as_ref())).unwrap())
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
@@ -465,12 +476,8 @@ impl Storage for SledStorageHandle {
     async fn get_all_ephemeral(&self, room_id: &str) -> Result<HashMap<String, JsonValue>, Error> {
         //TODO: this inserts an ephemeral entry even if the room doesn't actually exist - figure
         // out what to do about it
-        let mut ephemerals = self
-            .ephemeral
-            .lock()
-            .await;
-        let ephemeral = ephemerals.entry(String::from(room_id))
-            .or_default();
+        let mut ephemerals = self.ephemeral.lock().await;
+        let ephemeral = ephemerals.entry(String::from(room_id)).or_default();
         let mut ret = ephemeral.ephemeral.clone();
         ret.insert(
             String::from("m.typing"),
@@ -484,12 +491,8 @@ impl Storage for SledStorageHandle {
         room_id: &str,
         event_type: &str,
     ) -> Result<Option<JsonValue>, Error> {
-        let mut ephemerals = self
-            .ephemeral
-            .lock()
-            .await;
-        let ephemeral = ephemerals.entry(String::from(room_id))
-            .or_default();
+        let mut ephemerals = self.ephemeral.lock().await;
+        let ephemeral = ephemerals.entry(String::from(room_id)).or_default();
         if event_type == "m.typing" {
             let typing = ephemeral.get_typing();
             match typing.user_ids.is_empty() {
@@ -511,12 +514,8 @@ impl Storage for SledStorageHandle {
             event_type != "m.typing",
             "m.typing should not be set directly"
         );
-        let mut ephemerals = self
-            .ephemeral
-            .lock()
-            .await;
-        let ephemeral = ephemerals.entry(String::from(room_id))
-            .or_default();
+        let mut ephemerals = self.ephemeral.lock().await;
+        let ephemeral = ephemerals.entry(String::from(room_id)).or_default();
         match content {
             Some(c) => ephemeral.ephemeral.insert(String::from(event_type), c),
             None => ephemeral.ephemeral.remove(event_type),
@@ -531,12 +530,8 @@ impl Storage for SledStorageHandle {
         is_typing: bool,
         timeout: u32,
     ) -> Result<(), Error> {
-        let mut ephemerals = self
-            .ephemeral
-            .lock()
-            .await;
-        let ephemeral = ephemerals.entry(String::from(room_id))
-            .or_default();
+        let mut ephemerals = self.ephemeral.lock().await;
+        let ephemeral = ephemerals.entry(String::from(room_id)).or_default();
         if is_typing {
             ephemeral.typing.insert(
                 user_id.clone(),

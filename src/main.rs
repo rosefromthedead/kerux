@@ -1,12 +1,15 @@
 #[cfg(feature = "storage-postgres")]
 extern crate tokio_postgres as pg;
 
-use actix_web::{App, web::{self, JsonConfig}};
+use actix_web::{
+    web::{self, JsonConfig},
+    App,
+};
 use error::Error;
 use serde::Deserialize;
 use state::StateResolver;
-use tracing_subscriber::EnvFilter;
 use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
 
 mod client_api;
 mod error;
@@ -53,15 +56,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = toml::from_slice(&std::fs::read("config.toml")?)?;
     let db_pool = match &*config.storage {
         "mem" => {
-            let storage = Box::new(storage::mem::MemStorageManager::new()) as Box<dyn StorageManager>;
+            let storage =
+                Box::new(storage::mem::MemStorageManager::new()) as Box<dyn StorageManager>;
             storage.get_handle().await?.create_test_users().await?;
             storage
-        },
+        }
         "sled" => Box::new(storage::sled::SledStorage::new("sled")?) as _,
         _ => panic!("invalid storage type"),
     };
     let state_resolver = StateResolver::new(db_pool.get_handle().await?);
-    let server_state = Arc::new(ServerState { config, db_pool, state_resolver });
+    let server_state = Arc::new(ServerState {
+        config,
+        db_pool,
+        state_resolver,
+    });
 
     let server_state2 = Arc::clone(&server_state);
     actix_web::HttpServer::new(move || {
@@ -71,8 +79,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .service(web::scope("/_matrix/client").configure(client_api::configure_endpoints))
             .service(util::print_the_world)
     })
-        .bind(&server_state2.config.bind_address)?
-        .run()
-        .await?;
+    .bind(&server_state2.config.bind_address)?
+    .run()
+    .await?;
     Ok(())
 }

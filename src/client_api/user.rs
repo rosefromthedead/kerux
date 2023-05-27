@@ -1,33 +1,42 @@
 use actix_web::{
-    web::{Data, Json, Path},
     get, post, put,
+    web::{Data, Json, Path},
 };
-use tracing::{Level, Span, instrument, field::Empty};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
+use tracing::{field::Empty, instrument, Level, Span};
 
-use crate::{ServerState, client_api::auth::AccessToken, error::{Error, ErrorKind}, storage::UserProfile, util::MatrixId};
+use crate::{
+    client_api::auth::AccessToken,
+    error::{Error, ErrorKind},
+    storage::UserProfile,
+    util::MatrixId,
+    ServerState,
+};
 
 #[get("/profile/{user_id}/avatar_url")]
 #[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_avatar_url(
     state: Data<Arc<ServerState>>,
-    Path(user_id): Path<MatrixId>
+    Path(user_id): Path<MatrixId>,
 ) -> Result<Json<JsonValue>, Error> {
     if user_id.domain() != state.config.domain {
         return Err(ErrorKind::Unimplemented.into());
     }
 
     let db = state.db_pool.get_handle().await?;
-    let avatar_url = match db.get_profile(&user_id.localpart()).await?.unwrap().avatar_url {
+    let avatar_url = match db
+        .get_profile(&user_id.localpart())
+        .await?
+        .unwrap()
+        .avatar_url
+    {
         Some(v) => v,
         None => return Err(ErrorKind::NotFound.into()),
     };
 
-    Ok(Json(json!({
-        "avatar_url": avatar_url
-    })))
+    Ok(Json(json!({ "avatar_url": avatar_url })))
 }
 
 #[put("/profile/{user_id}/avatar_url")]
@@ -36,7 +45,7 @@ pub async fn set_avatar_url(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     Path(req_id): Path<MatrixId>,
-    body: Json<JsonValue>
+    body: Json<JsonValue>,
 ) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
@@ -50,8 +59,12 @@ pub async fn set_avatar_url(
     }
 
     let avatar_url = body
-        .get("avatar_url").ok_or(ErrorKind::BadJson(String::from("no avatar_url field")))?
-        .as_str().ok_or(ErrorKind::BadJson(String::from("avatar_url should be a string")))?;
+        .get("avatar_url")
+        .ok_or(ErrorKind::BadJson(String::from("no avatar_url field")))?
+        .as_str()
+        .ok_or(ErrorKind::BadJson(String::from(
+            "avatar_url should be a string",
+        )))?;
     db.set_avatar_url(&username, avatar_url).await?;
     Ok(Json(()))
 }
@@ -60,21 +73,24 @@ pub async fn set_avatar_url(
 #[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_display_name(
     state: Data<Arc<ServerState>>,
-    Path(user_id): Path<MatrixId>
+    Path(user_id): Path<MatrixId>,
 ) -> Result<Json<JsonValue>, Error> {
     if user_id.domain() != state.config.domain {
         return Err(ErrorKind::Unknown("User does not live on this homeserver".to_string()).into());
     }
 
     let db = state.db_pool.get_handle().await?;
-    let displayname = match db.get_profile(&user_id.localpart()).await?.unwrap().displayname {
+    let displayname = match db
+        .get_profile(&user_id.localpart())
+        .await?
+        .unwrap()
+        .displayname
+    {
         Some(v) => v,
         None => return Err(ErrorKind::NotFound.into()),
     };
 
-    Ok(Json(json!({
-        "displayname": displayname
-    })))
+    Ok(Json(json!({ "displayname": displayname })))
 }
 
 #[put("/profile/{user_id}/displayname")]
@@ -83,7 +99,7 @@ pub async fn set_display_name(
     state: Data<Arc<ServerState>>,
     token: AccessToken,
     Path(req_id): Path<MatrixId>,
-    body: Json<JsonValue>
+    body: Json<JsonValue>,
 ) -> Result<Json<()>, Error> {
     let db = state.db_pool.get_handle().await?;
     let username = db.try_auth(token.0).await?.ok_or(ErrorKind::UnknownToken)?;
@@ -97,8 +113,12 @@ pub async fn set_display_name(
     }
 
     let display_name = body
-        .get("displayname").ok_or(ErrorKind::BadJson(String::from("no displayname field")))?
-        .as_str().ok_or(ErrorKind::BadJson(String::from("displayname should be a string")))?;
+        .get("displayname")
+        .ok_or(ErrorKind::BadJson(String::from("no displayname field")))?
+        .as_str()
+        .ok_or(ErrorKind::BadJson(String::from(
+            "displayname should be a string",
+        )))?;
     db.set_display_name(&username, &display_name).await?;
     Ok(Json(()))
 }
@@ -107,14 +127,17 @@ pub async fn set_display_name(
 #[instrument(skip(state), err = Level::DEBUG)]
 pub async fn get_profile(
     state: Data<Arc<ServerState>>,
-    Path(user_id): Path<MatrixId>
+    Path(user_id): Path<MatrixId>,
 ) -> Result<Json<JsonValue>, Error> {
     if user_id.domain() != state.config.domain {
         return Err(ErrorKind::Unknown("User does not live on this homeserver".to_string()).into());
     }
 
     let db = state.db_pool.get_handle().await?;
-    let UserProfile { avatar_url, displayname } = db.get_profile(&user_id.localpart()).await?.unwrap();
+    let UserProfile {
+        avatar_url,
+        displayname,
+    } = db.get_profile(&user_id.localpart()).await?.unwrap();
     let mut response = serde_json::Map::new();
     if let Some(v) = avatar_url {
         response.insert("avatar_url".into(), v.into());

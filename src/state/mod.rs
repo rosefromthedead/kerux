@@ -1,9 +1,26 @@
-use std::{borrow::Cow, cmp::Ordering, collections::{BTreeSet, HashMap, HashSet}, convert::TryInto, iter::FromIterator, sync::{Arc, Mutex}};
+use std::{
+    borrow::Cow,
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap, HashSet},
+    convert::TryInto,
+    iter::FromIterator,
+    sync::{Arc, Mutex},
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 use tracing::trace;
 
-use crate::{error::Error, events::{EventContent, EventType, pdu::StoredPdu, room::{Member, Membership}, room_version::VersionedPdu}, storage::Storage, validate::auth::AuthStatus};
+use crate::{
+    error::Error,
+    events::{
+        pdu::StoredPdu,
+        room::{Member, Membership},
+        room_version::VersionedPdu,
+        EventContent, EventType,
+    },
+    storage::Storage,
+    validate::auth::AuthStatus,
+};
 
 use super::StorageExt;
 
@@ -21,22 +38,40 @@ impl State {
 
     pub fn get<'s, 'k: 's>(&'s self, key_strs: (&'k str, &'k str)) -> Option<&'s str> {
         let key = Self::key(key_strs);
-        self.map.get::<(Cow<'k, str>, Cow<'k, str>)>(&key).map(String::as_str)
+        self.map
+            .get::<(Cow<'k, str>, Cow<'k, str>)>(&key)
+            .map(String::as_str)
     }
 
-    pub async fn get_content<T: EventType>(&self, db: &dyn Storage, state_key: &str) -> Result<Option<T>, Error> {
+    pub async fn get_content<T: EventType>(
+        &self,
+        db: &dyn Storage,
+        state_key: &str,
+    ) -> Result<Option<T>, Error> {
         if let Some(event_id) = self.get((T::EVENT_TYPE, state_key)) {
-            let event = db.get_pdu(&self.room_id, &event_id).await?
+            let event = db
+                .get_pdu(&self.room_id, &event_id)
+                .await?
                 .expect("event in state doesn't exist");
-            return Ok(Some(event.event_content().clone().try_into().map_err(|_| ()).unwrap()))
+            return Ok(Some(
+                event
+                    .event_content()
+                    .clone()
+                    .try_into()
+                    .map_err(|_| ())
+                    .unwrap(),
+            ));
         }
         Ok(None)
     }
 
     pub fn insert_event(&mut self, pdu: &VersionedPdu) {
         self.map.insert(
-            (Cow::from(pdu.event_content().get_type().to_string()), Cow::from(pdu.state_key().unwrap().to_string())),
-            pdu.event_id().to_string()
+            (
+                Cow::from(pdu.event_content().get_type().to_string()),
+                Cow::from(pdu.state_key().unwrap().to_string()),
+            ),
+            pdu.event_id().to_string(),
         );
     }
 }
@@ -81,13 +116,16 @@ impl StateResolver {
             let mut state = self.resolve_v2(room_id, event.prev_events()).await?;
             if event.did_pass_auth() && event.state_key().is_some() {
                 trace!(
-                    event_type=event.event_content().get_type(),
-                    state_key=event.state_key().unwrap(),
+                    event_type = event.event_content().get_type(),
+                    state_key = event.state_key().unwrap(),
                     "applying one event on top of state"
                 );
                 state.insert_event(&event.inner());
             }
-            self.cache.lock().unwrap().insert(BTreeSet::from_iter([events[0].clone()]), state.clone());
+            self.cache
+                .lock()
+                .unwrap()
+                .insert(BTreeSet::from_iter([events[0].clone()]), state.clone());
             return Ok(state);
         }
 
@@ -124,9 +162,15 @@ impl StateResolver {
         for state in scratch.values() {
             for (type_and_key, event_id) in state.map.iter() {
                 if !state_set.contains_key(type_and_key) {
-                    state_set.insert((type_and_key.0.clone(), type_and_key.1.clone()), HashSet::new());
+                    state_set.insert(
+                        (type_and_key.0.clone(), type_and_key.1.clone()),
+                        HashSet::new(),
+                    );
                 }
-                state_set.get_mut(type_and_key).unwrap().insert(event_id.clone());
+                state_set
+                    .get_mut(type_and_key)
+                    .unwrap()
+                    .insert(event_id.clone());
             }
         }
         let mut unconflicted_state_map = HashMap::new();
@@ -141,7 +185,10 @@ impl StateResolver {
         }
 
         let auth_difference = self.auth_difference(room_id, events).await?;
-        let mut full_conflicted_set = conflicted_state_set.union(&auth_difference).map(Clone::clone).collect::<HashSet<_>>();
+        let mut full_conflicted_set = conflicted_state_set
+            .union(&auth_difference)
+            .map(Clone::clone)
+            .collect::<HashSet<_>>();
 
         // The spec says we're also supposed to take all the events from these events' auth chains
         // that are in the full conflicted set, but Synapse doesn't seem to do anything special so
@@ -160,7 +207,9 @@ impl StateResolver {
             full_conflicted_set.remove(&**event_id);
         }
 
-        let ordered_power_event_ids = self.reverse_topological_power_ordering(room_id, power_events).await?;
+        let ordered_power_event_ids = self
+            .reverse_topological_power_ordering(room_id, power_events)
+            .await?;
 
         // STEP 2
         // where the auth checks happen ???
@@ -178,16 +227,18 @@ impl StateResolver {
             .map(|event_id| self.db.get_pdu(&room_id, event_id));
         let ordered_power_events = futures::stream::iter(future_iter)
             .then(|f| f)
-            .try_filter_map(|opt| async { Ok(opt) })    // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
+            .try_filter_map(|opt| async { Ok(opt) }) // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
             .try_collect::<Vec<_>>()
             .await?;
-        let partially_resolved_state = self.iterative_auth_checks(
-            partially_resolved_state,
-            ordered_power_events
-                .iter()
-                .filter(|e| e.state_key().is_some())
-                .map(|e| e.inner())
-        ).await?;
+        let partially_resolved_state = self
+            .iterative_auth_checks(
+                partially_resolved_state,
+                ordered_power_events
+                    .iter()
+                    .filter(|e| e.state_key().is_some())
+                    .map(|e| e.inner()),
+            )
+            .await?;
 
         // STEP 3
         // mainline ordering D:
@@ -197,8 +248,9 @@ impl StateResolver {
             for auth_event_id in auth_events.iter() {
                 let auth_event = self.db.get_pdu(room_id, auth_event_id).await?.unwrap();
                 match auth_event.event_content() {
-                    EventContent::PowerLevels(_) =>
-                        return Result::<Option<String>, Error>::Ok(Some(auth_event_id.clone())),
+                    EventContent::PowerLevels(_) => {
+                        return Result::<Option<String>, Error>::Ok(Some(auth_event_id.clone()))
+                    }
                     _ => continue,
                 }
             }
@@ -208,10 +260,20 @@ impl StateResolver {
 
         // i seriously have no idea what to do if this doesn't exist
         let mainline_starting_point = partially_resolved_state
-            .get(("m.room.power_levels", "")).expect("oh no");
+            .get(("m.room.power_levels", ""))
+            .expect("oh no");
         let mut mainline = vec![mainline_starting_point.to_owned()];
         let mut current = mainline_starting_point;
-        while let Some(parent) = get_power_levels(self.db.get_pdu(room_id, &current).await?.unwrap().inner().clone()).await? {
+        while let Some(parent) = get_power_levels(
+            self.db
+                .get_pdu(room_id, &current)
+                .await?
+                .unwrap()
+                .inner()
+                .clone(),
+        )
+        .await?
+        {
             mainline.push(parent.clone());
             current = &mainline.last().unwrap();
         }
@@ -221,7 +283,9 @@ impl StateResolver {
         for event_id in full_conflicted_set.iter() {
             let mut current = event_id.clone();
             let closest_mainline = 'inner: loop {
-                if let Some((index, _)) = mainline.iter().enumerate().find(|(_, id)| **id == current) {
+                if let Some((index, _)) =
+                    mainline.iter().enumerate().find(|(_, id)| **id == current)
+                {
                     break 'inner index;
                 }
 
@@ -245,7 +309,9 @@ impl StateResolver {
             .iter()
             .map(|(e, _m)| &e.inner)
             .filter(|e| e.state_key().is_some());
-        let mut partially_resolved_state = self.iterative_auth_checks(partially_resolved_state, new_state_events).await?;
+        let mut partially_resolved_state = self
+            .iterative_auth_checks(partially_resolved_state, new_state_events)
+            .await?;
 
         // STEP 5 ???????
 
@@ -256,13 +322,21 @@ impl StateResolver {
         Ok(partially_resolved_state) // not partially anymore lmao
     }
 
-    async fn auth_chains(&self, room_id: &str, event_ids: &[String]) -> Result<HashSet<String>, Error> {
+    async fn auth_chains(
+        &self,
+        room_id: &str,
+        event_ids: &[String],
+    ) -> Result<HashSet<String>, Error> {
         let mut ret = HashSet::new();
         let mut to_check = Vec::new();
         to_check.extend_from_slice(event_ids);
         while !to_check.is_empty() {
             let event_id = to_check.pop().unwrap();
-            let pdu = self.db.get_pdu(room_id, &event_id).await?.expect("event not found");
+            let pdu = self
+                .db
+                .get_pdu(room_id, &event_id)
+                .await?
+                .expect("event not found");
             for auth_event_id in pdu.auth_events() {
                 if !ret.contains(auth_event_id) {
                     to_check.push(auth_event_id.clone());
@@ -274,10 +348,14 @@ impl StateResolver {
         Ok(ret)
     }
 
-    async fn auth_difference(&self, room_id: &str, event_ids: &[String]) -> Result<HashSet<String>, Error> {
+    async fn auth_difference(
+        &self,
+        room_id: &str,
+        event_ids: &[String],
+    ) -> Result<HashSet<String>, Error> {
         assert_ne!(event_ids.len(), 0);
         if event_ids.len() == 1 {
-            return Ok(HashSet::new())
+            return Ok(HashSet::new());
         }
         let mut chains = Vec::new();
         for event_id in event_ids {
@@ -287,20 +365,27 @@ impl StateResolver {
         let intersection = {
             let mut iter = chains.iter();
             let first = iter.next().unwrap().clone();
-            iter.fold(
-                first,
-                |acc, x| acc.intersection(&x).cloned().collect()
-                )
+            iter.fold(first, |acc, x| acc.intersection(&x).cloned().collect())
         };
-        let union = chains.iter().fold(HashSet::new(), |acc, x| acc.union(&x).cloned().collect());
+        let union = chains
+            .iter()
+            .fold(HashSet::new(), |acc, x| acc.union(&x).cloned().collect());
         let difference = union.difference(&intersection).cloned().collect();
         Ok(difference)
     }
 
-    async fn reverse_topological_power_ordering(&self, room_id: &str, event_ids: HashSet<String>) -> Result<Vec<String>, Error> {
+    async fn reverse_topological_power_ordering(
+        &self,
+        room_id: &str,
+        event_ids: HashSet<String>,
+    ) -> Result<Vec<String>, Error> {
         let mut events = HashMap::new();
         for event_id in event_ids {
-            let event = self.db.get_pdu(room_id, &event_id).await?.expect("event not found");
+            let event = self
+                .db
+                .get_pdu(room_id, &event_id)
+                .await?
+                .expect("event not found");
             events.insert(event_id, event);
         }
 
@@ -319,7 +404,10 @@ impl StateResolver {
 
             let mut sender_power_levels = HashMap::new();
             for event in candidates.iter() {
-                let power_level = self.db.get_sender_power_level(&event.room_id(), &event.event_id()).await?;
+                let power_level = self
+                    .db
+                    .get_sender_power_level(&event.room_id(), &event.event_id())
+                    .await?;
                 sender_power_levels.insert(event.event_id(), power_level);
             }
 
@@ -359,7 +447,7 @@ impl StateResolver {
                 .map(|event_id| self.db.get_pdu(&state.room_id, event_id));
             let auth_events = futures::stream::iter(future_iter)
                 .then(|f| f)
-                .try_filter_map(|opt| async { Ok(opt) })    // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
+                .try_filter_map(|opt| async { Ok(opt) }) // Ok(Some(x)) -> Ok(x), Ok(None) filtered out
                 .try_collect::<Vec<_>>()
                 .await?;
 
@@ -369,14 +457,19 @@ impl StateResolver {
                 if !frankenstate.map.contains_key(&State::key(auth_key)) {
                     let fallback_event = auth_events
                         .iter()
-                        .find(|pdu| pdu.event_content().get_type() == auth_key.0 && pdu.state_key() == Some(auth_key.1))
+                        .find(|pdu| {
+                            pdu.event_content().get_type() == auth_key.0
+                                && pdu.state_key() == Some(auth_key.1)
+                        })
                         .expect("auth event wasn't present in db");
                     frankenstate.insert_event(&fallback_event.inner());
                 }
             }
 
             // if it passes auth now, we can add it to the state
-            if crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await? == AuthStatus::Pass {
+            if crate::validate::auth::auth_check_v1(&*self.db, &event, &frankenstate).await?
+                == AuthStatus::Pass
+            {
                 state.insert_event(&event);
             }
         }
@@ -388,9 +481,14 @@ impl StateResolver {
 fn is_power_event(pdu: &VersionedPdu) -> bool {
     match pdu.event_content() {
         EventContent::PowerLevels(_) | EventContent::JoinRules(_) => true,
-        EventContent::Member(Member { membership: Membership::Leave, .. }) |
-            EventContent::Member(Member { membership: Membership::Ban, .. })
-            if pdu.state_key().as_deref() != Some(pdu.sender().as_str()) => true,
+        EventContent::Member(Member {
+            membership: Membership::Leave,
+            ..
+        })
+        | EventContent::Member(Member {
+            membership: Membership::Ban,
+            ..
+        }) if pdu.state_key().as_deref() != Some(pdu.sender().as_str()) => true,
         _ => false,
     }
 }
@@ -444,7 +542,17 @@ fn mainline_cmp(x: &(StoredPdu, usize), y: &(StoredPdu, usize)) -> Ordering {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{storage::{Storage, StorageManager}, error::Error, util::{StorageExt, storage::NewEvent, MatrixId}, events::{room::{Create, Name, Member, Membership}, EventContent, room_version::{v4::UnhashedPdu, VersionedPdu}, pdu::StoredPdu}};
+    use crate::{
+        error::Error,
+        events::{
+            pdu::StoredPdu,
+            room::{Create, Member, Membership, Name},
+            room_version::{v4::UnhashedPdu, VersionedPdu},
+            EventContent,
+        },
+        storage::{Storage, StorageManager},
+        util::{storage::NewEvent, MatrixId, StorageExt},
+    };
 
     use super::StateResolver;
 
@@ -479,12 +587,14 @@ mod tests {
                 prev_events: Vec::new(),
                 depth: 0,
                 auth_events: Vec::new(),
-            }.finalize();
+            }
+            .finalize();
             let creation_id = creation.event_id();
             db.add_pdus(&[StoredPdu {
                 inner: VersionedPdu::V4(creation),
                 auth_status: crate::validate::auth::AuthStatus::Pass,
-            }]).await?;
+            }])
+            .await?;
             Ok(TestRoom {
                 db,
                 room_id: room_id.to_owned(),
@@ -515,19 +625,22 @@ mod tests {
             };
 
             let auth_events = crate::util::storage::calc_auth_events(&new_event, &state);
-            let pdu = VersionedPdu::V4(UnhashedPdu {
-                event_content: new_event.event_content,
-                room_id: self.room_id.clone(),
-                sender: new_event.sender,
-                state_key: new_event.state_key,
-                unsigned: None,
-                redacts: None,
-                origin: String::from("example.org"),
-                origin_server_ts: 0,
-                prev_events: prev_events.clone(),
-                depth: depth as i64,
-                auth_events,
-            }.finalize());
+            let pdu = VersionedPdu::V4(
+                UnhashedPdu {
+                    event_content: new_event.event_content,
+                    room_id: self.room_id.clone(),
+                    sender: new_event.sender,
+                    state_key: new_event.state_key,
+                    unsigned: None,
+                    redacts: None,
+                    origin: String::from("example.org"),
+                    origin_server_ts: 0,
+                    prev_events: prev_events.clone(),
+                    depth: depth as i64,
+                    auth_events,
+                }
+                .finalize(),
+            );
             let event_id = pdu.event_id();
 
             if self.depth_map.len() == depth {
@@ -538,67 +651,89 @@ mod tests {
             self.depth_map[depth].push(event_id.clone());
 
             let auth_status = crate::validate::auth::auth_check_v1(self.db, &pdu, &state).await?;
-            self.db.add_pdus(&[StoredPdu {
-                inner: pdu,
-                auth_status,
-            }]).await?;
+            self.db
+                .add_pdus(&[StoredPdu {
+                    inner: pdu,
+                    auth_status,
+                }])
+                .await?;
 
             Ok(event_id)
         }
     }
 
-    async fn construct_cursed_room(db: &dyn Storage, resolver: &StateResolver) -> Result<(), Error> {
+    async fn construct_cursed_room(
+        db: &dyn Storage,
+        resolver: &StateResolver,
+    ) -> Result<(), Error> {
         let room_id = "!cursed:example.org";
         let alice = MatrixId::new("alice", "example.org").unwrap();
         db.add_pdus(&[StoredPdu {
-            inner: VersionedPdu::V4(UnhashedPdu {
-                event_content: EventContent::Create(Create {
-                    creator: alice.clone(),
-                    room_version: Some(String::from("4")),
-                    predecessor: None,
-                    extra: HashMap::new(),
+            inner: VersionedPdu::V4(
+                UnhashedPdu {
+                    event_content: EventContent::Create(Create {
+                        creator: alice.clone(),
+                        room_version: Some(String::from("4")),
+                        predecessor: None,
+                        extra: HashMap::new(),
+                    }),
+                    room_id: String::from(room_id),
+                    sender: alice.clone(),
+                    state_key: Some(String::new()),
+                    unsigned: None,
+                    redacts: None,
+                    origin: String::from("example.org"),
+                    origin_server_ts: 0,
+                    prev_events: Vec::new(),
+                    depth: 0,
+                    auth_events: Vec::new(),
+                }
+                .finalize(),
+            ),
+            auth_status: crate::validate::auth::AuthStatus::Pass,
+        }])
+        .await?;
+        db.add_event(
+            room_id,
+            NewEvent {
+                event_content: EventContent::Member(Member {
+                    avatar_url: None,
+                    displayname: None,
+                    membership: Membership::Join,
+                    is_direct: Some(false),
                 }),
-                room_id: String::from(room_id),
+                sender: alice.clone(),
+                state_key: Some(alice.clone_inner()),
+                redacts: None,
+                unsigned: None,
+            },
+            resolver,
+        )
+        .await?;
+        db.add_event(
+            room_id,
+            NewEvent {
+                event_content: EventContent::Name(Name {
+                    name: Some(String::from("one")),
+                }),
                 sender: alice.clone(),
                 state_key: Some(String::new()),
-                unsigned: None,
                 redacts: None,
-                origin: String::from("example.org"),
-                origin_server_ts: 0,
-                prev_events: Vec::new(),
-                depth: 0,
-                auth_events: Vec::new(),
-            }.finalize()),
-            auth_status: crate::validate::auth::AuthStatus::Pass,
-        }]).await?;
-        db.add_event(room_id, NewEvent {
-            event_content: EventContent::Member(Member {
-                avatar_url: None,
-                displayname: None,
-                membership: Membership::Join,
-                is_direct: Some(false),
-            }),
-            sender: alice.clone(),
-            state_key: Some(alice.clone_inner()),
-            redacts: None,
-            unsigned: None
-        }, resolver).await?;
-        db.add_event(room_id, NewEvent {
-            event_content: EventContent::Name(Name {
-                name: Some(String::from("one")),
-            }),
-            sender: alice.clone(),
-            state_key: Some(String::new()),
-            redacts: None,
-            unsigned: None,
-        }, resolver).await?;
+                unsigned: None,
+            },
+            resolver,
+        )
+        .await?;
         Ok(())
     }
 
     #[test]
     fn linear() {
         crate::init_tracing();
-        let mut rt = tokio::runtime::Builder::new().basic_scheduler().build().unwrap();
+        let mut rt = tokio::runtime::Builder::new()
+            .basic_scheduler()
+            .build()
+            .unwrap();
         rt.block_on(linear_inner()).unwrap();
     }
 
@@ -610,26 +745,74 @@ mod tests {
         let alice = MatrixId::new("alice", "example.org").unwrap();
         let room_id = "!linear:example.org";
         let mut room = TestRoom::create(&*db, room_id, &alice).await?;
-        let _alice_join = room.add(1, &alice, Member {
-            avatar_url: None,
-            displayname: None,
-            membership: Membership::Join,
-            is_direct: Some(false),
-        }, Some(alice.as_str()), &resolver).await?;
-        let name1 = room.add(2, &alice, Name {
-            name: Some(String::from("one")),
-        }, Some(""), &resolver).await?;
+        let _alice_join = room
+            .add(
+                1,
+                &alice,
+                Member {
+                    avatar_url: None,
+                    displayname: None,
+                    membership: Membership::Join,
+                    is_direct: Some(false),
+                },
+                Some(alice.as_str()),
+                &resolver,
+            )
+            .await?;
+        let name1 = room
+            .add(
+                2,
+                &alice,
+                Name {
+                    name: Some(String::from("one")),
+                },
+                Some(""),
+                &resolver,
+            )
+            .await?;
 
         let state1 = resolver.resolve(room_id, &[name1.clone()]).await?;
-        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("one"));
+        assert_eq!(
+            state1
+                .get_content::<Name>(&*db, "")
+                .await?
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("one")
+        );
 
-        let name2 = room.add(3, &alice, Name {
-            name: Some(String::from("two")),
-        }, Some(""), &resolver).await?;
+        let name2 = room
+            .add(
+                3,
+                &alice,
+                Name {
+                    name: Some(String::from("two")),
+                },
+                Some(""),
+                &resolver,
+            )
+            .await?;
         let state2 = resolver.resolve(room_id, &[name2]).await?;
-        assert_eq!(state2.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("two"));
+        assert_eq!(
+            state2
+                .get_content::<Name>(&*db, "")
+                .await?
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("two")
+        );
         let state1 = resolver.resolve(room_id, &[name1]).await?;
-        assert_eq!(state1.get_content::<Name>(&*db, "").await?.unwrap().name.as_deref(), Some("one"));
+        assert_eq!(
+            state1
+                .get_content::<Name>(&*db, "")
+                .await?
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("one")
+        );
         Ok(())
     }
 }
